@@ -34,7 +34,9 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "HAROO"
+      "shortcutName": "HAROO",
+      "uninstallDisplayName": "HAROO (하루)",
+      "deleteAppDataOnUninstall": true
     },
     "portable": { "artifactName": "HAROO-portable-${version}.exe" }
   }
