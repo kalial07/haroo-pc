@@ -1,0 +1,41 @@
+{
+  "name": "haroo-pc",
+  "version": "0.1.0",
+  "description": "HAROO — PC 바탕화면 데스크톱 펫 (V1 실용형 오버레이 셸)",
+  "main": "src/main.js",
+  "author": "Meinco",
+  "license": "UNLICENSED",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron .",
+    "dist": "electron-builder --win",
+    "dist:portable": "electron-builder --win portable"
+  },
+  "dependencies": {
+    "electron-store": "^8.2.0"
+  },
+  "devDependencies": {
+    "electron": "^31.7.7",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.meinco.haroo",
+    "productName": "HAROO",
+    "directories": { "output": "dist", "buildResources": "build" },
+    "files": ["src/**/*", "renderer/**/*", "resources/**/*"],
+    "win": {
+      "target": ["nsis", "portable"],
+      "icon": "resources/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "HAROO"
+    },
+    "portable": { "artifactName": "HAROO-portable-${version}.exe" }
+  }
+}
