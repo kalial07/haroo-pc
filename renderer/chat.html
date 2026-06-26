@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>하루와 대화</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Jua&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.css">
+<style>
+  :root{
+    --bg:#e9eef5;          /* 메시지 영역 배경 */
+    --panel:#ffffff;
+    --line:#e7e9ee;
+    --ink:#1f2430;
+    --sub:#8b91a0;
+    --me:#4c8dff;          /* 내 말풍선 */
+    --haru:#fff7ee;        /* 하루 말풍선 */
+    --haru-line:#ffe2c4;
+    --accent:#ff9b6a;      /* 하루 포인트(코랄) */
+    --radius:16px;
+    --font: "Pretendard", -apple-system, "Malgun Gothic", sans-serif;
+    --display: "Jua", var(--font);
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  html,body{height:100%; background:transparent;}
+  body{
+    font-family:var(--font); color:var(--ink);
+    -webkit-font-smoothing:antialiased; overflow:hidden;
+  }
+  /* 창 전체를 둥근 패널로 (프레임리스+투명 창) */
+  .app{
+    height:100vh; width:100vw;
+    background:var(--panel);
+    border-radius:var(--radius);
+    overflow:hidden;
+    display:flex; flex-direction:column;
+    border:1px solid var(--line);
+  }
+
+  /* 헤더 (드래그 영역) */
+  .head{
+    -webkit-app-region:drag;
+    flex:0 0 auto;
+    display:flex; align-items:center; gap:10px;
+    padding:12px 12px 12px 14px;
+    background:var(--panel);
+    border-bottom:1px solid var(--line);
+  }
+  .ava{
+    width:34px; height:34px; border-radius:50%;
+    background:linear-gradient(135deg,#ffd9bf,#ff9b6a);
+    display:flex; align-items:center; justify-content:center;
+    font-family:var(--display); color:#fff; font-size:16px; flex:0 0 auto;
+  }
+  .titlewrap{display:flex; flex-direction:column; line-height:1.15; min-width:0;}
+  .title{font-family:var(--display); font-size:16px;}
+  .status{font-size:11px; color:var(--sub);}
+  .spacer{flex:1 1 auto;}
+
+  /* AI 선택 드롭다운 */
+  .ai{position:relative; -webkit-app-region:no-drag;}
+  .ai-btn{
+    display:flex; align-items:center; gap:6px;
+    height:30px; padding:0 10px;
+    border:1px solid var(--line); border-radius:999px;
+    background:#f6f7f9; color:var(--ink); font-family:var(--font);
+    font-size:12.5px; cursor:pointer;
+  }
+  .ai-btn .dot{width:7px; height:7px; border-radius:50%; background:var(--accent);}
+  .ai-btn .caret{color:var(--sub); font-size:10px;}
+  .ai-menu{
+    position:absolute; right:0; top:36px; z-index:10;
+    background:#fff; border:1px solid var(--line); border-radius:12px;
+    box-shadow:0 8px 24px rgba(30,40,60,.14);
+    padding:6px; min-width:150px; display:none;
+  }
+  .ai-menu.open{display:block;}
+  .ai-item{
+    display:flex; align-items:center; gap:8px;
+    padding:8px 10px; border-radius:8px; cursor:pointer; font-size:13px;
+  }
+  .ai-item:hover{background:#f3f5f8;}
+  .ai-item .chk{margin-left:auto; color:var(--me); font-size:13px; visibility:hidden;}
+  .ai-item.sel .chk{visibility:visible;}
+
+  .close{
+    -webkit-app-region:no-drag;
+    width:30px; height:30px; border-radius:8px; border:none;
+    background:transparent; color:var(--sub); font-size:18px; cursor:pointer;
+  }
+  .close:hover{background:#f1f2f5; color:var(--ink);}
+
+  /* 메시지 영역 */
+  .msgs{
+    flex:1 1 auto; overflow-y:auto;
+    background:var(--bg);
+    padding:16px 14px 8px;
+    display:flex; flex-direction:column; gap:10px;
+  }
+  .msgs::-webkit-scrollbar{width:8px;}
+  .msgs::-webkit-scrollbar-thumb{background:#cfd6e0; border-radius:8px;}
+
+  .row{display:flex; align-items:flex-end; gap:8px; max-width:100%;}
+  .row.me{flex-direction:row-reverse;}
+  .row .mini{
+    width:26px; height:26px; border-radius:50%; flex:0 0 auto;
+    background:linear-gradient(135deg,#ffd9bf,#ff9b6a);
+    display:flex; align-items:center; justify-content:center;
+    font-family:var(--display); color:#fff; font-size:12px;
+  }
+  .bubble{
+    max-width:74%; padding:9px 12px; font-size:14px; line-height:1.5;
+    border-radius:14px; word-break:break-word; white-space:pre-wrap;
+    animation:pop .18s ease both;
+  }
+  .row.haru .bubble{
+    background:var(--haru); border:1px solid var(--haru-line);
+    border-bottom-left-radius:5px; color:#3a2f27;
+  }
+  .row.me .bubble{
+    background:var(--me); color:#fff; border-bottom-right-radius:5px;
+  }
+  .time{font-size:10.5px; color:var(--sub); align-self:flex-end; margin:0 2px;}
+  .row.me .time{order:-1;}
+
+  .sys{
+    align-self:center; font-size:11.5px; color:var(--sub);
+    background:#dde4ee; padding:4px 12px; border-radius:999px; margin:2px 0;
+  }
+
+  @keyframes pop{from{opacity:0; transform:translateY(4px);} to{opacity:1; transform:none;}}
+  @media (prefers-reduced-motion: reduce){ .bubble{animation:none;} }
+
+  /* 입력 바 */
+  .inbar{
+    flex:0 0 auto; display:flex; align-items:flex-end; gap:8px;
+    padding:10px 12px; background:var(--panel); border-top:1px solid var(--line);
+  }
+  .input{
+    flex:1 1 auto; resize:none; max-height:120px; min-height:42px;
+    border:1px solid var(--line); border-radius:14px;
+    padding:10px 12px; font-family:var(--font); font-size:14px; line-height:1.4;
+    outline:none; background:#f7f8fa; color:var(--ink);
+  }
+  .input:focus{border-color:#c7d4ea; background:#fff;}
+  .send{
+    flex:0 0 auto; width:42px; height:42px; border-radius:50%; border:none;
+    background:var(--me); color:#fff; font-size:18px; cursor:pointer;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .send:disabled{background:#bcd0f4; cursor:default;}
+
+  .badge{
+    font-size:10px; color:#a86a3e; background:#ffe9d6;
+    padding:2px 7px; border-radius:999px; margin-left:2px;
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="head">
+    <div class="ava">하</div>
+    <div class="titlewrap">
+      <div class="title">하루</div>
+      <div class="status">대화 모드 <span class="badge">목(mock)</span></div>
+    </div>
+    <div class="spacer"></div>
+    <div class="ai">
+      <button class="ai-btn" id="aiBtn">
+        <span class="dot"></span><span id="aiName">Claude</span><span class="caret">▼</span>
+      </button>
+      <div class="ai-menu" id="aiMenu">
+        <div class="ai-item sel" data-ai="Claude"><span class="dot" style="width:7px;height:7px;border-radius:50%;background:#d97757;"></span>Claude<span class="chk">✓</span></div>
+        <div class="ai-item" data-ai="ChatGPT"><span class="dot" style="width:7px;height:7px;border-radius:50%;background:#10a37f;"></span>ChatGPT<span class="chk">✓</span></div>
+        <div class="ai-item" data-ai="Gemini"><span class="dot" style="width:7px;height:7px;border-radius:50%;background:#4285f4;"></span>Gemini<span class="chk">✓</span></div>
+      </div>
+    </div>
+    <button class="close" id="closeBtn" title="닫기">✕</button>
+  </div>
+
+  <div class="msgs" id="msgs"></div>
+
+  <div class="inbar">
+    <textarea class="input" id="input" rows="1" placeholder="하루에게 메시지…"></textarea>
+    <button class="send" id="send" title="보내기">➤</button>
+  </div>
+</div>
+
+<script>
+(function () {
+  var msgs = document.getElementById('msgs');
+  var input = document.getElementById('input');
+  var send = document.getElementById('send');
+  var aiBtn = document.getElementById('aiBtn');
+  var aiMenu = document.getElementById('aiMenu');
+  var aiName = document.getElementById('aiName');
+  var closeBtn = document.getElementById('closeBtn');
+  var currentAI = 'Claude';
+
+  function now() {
+    var d = new Date();
+    var h = d.getHours(), m = d.getMinutes();
+    var ap = h < 12 ? '오전' : '오후';
+    var hh = h % 12; if (hh === 0) hh = 12;
+    return ap + ' ' + hh + ':' + (m < 10 ? '0' + m : m);
+  }
+  function scroll() { msgs.scrollTop = msgs.scrollHeight; }
+
+  function addMsg(who, text) {
+    var row = document.createElement('div');
+    row.className = 'row ' + who;
+    var b = document.createElement('div'); b.className = 'bubble'; b.textContent = text;
+    var t = document.createElement('div'); t.className = 'time'; t.textContent = now();
+    if (who === 'haru') {
+      var mini = document.createElement('div'); mini.className = 'mini'; mini.textContent = '하';
+      row.appendChild(mini); row.appendChild(b); row.appendChild(t);
+    } else {
+      row.appendChild(b); row.appendChild(t);
+    }
+    msgs.appendChild(row); scroll();
+  }
+  function addSys(text) {
+    var s = document.createElement('div'); s.className = 'sys'; s.textContent = text;
+    msgs.appendChild(s); scroll();
+  }
+
+  // 목 응답 (API 키 연결 전)
+  var mockLines = [
+    '지금은 목(mock) 모드예요. API 키를 연결하면 진짜 ' ,
+    '아직 키가 없어서 실제 답은 못 해요. 곧 ' ,
+    '연결만 되면 ' 
+  ];
+  var mi = 0;
+  function mockReply(userText) {
+    var lead = mockLines[mi % mockLines.length]; mi++;
+    return lead + currentAI + '로 대답할게요! (방금 "' +
+      (userText.length > 18 ? userText.slice(0, 18) + '…' : userText) + '" 라고 했죠?)';
+  }
+
+  function doSend() {
+    var v = input.value.trim();
+    if (!v) return;
+    addMsg('me', v);
+    input.value = ''; autoGrow(); input.focus();
+    setTimeout(function () { addMsg('haru', mockReply(v)); }, 550);
+  }
+
+  function autoGrow() {
+    input.style.height = 'auto';
+    input.style.height = Math.min(120, input.scrollHeight) + 'px';
+  }
+
+  // AI 전환
+  function setAI(name) {
+    if (name === currentAI) { aiMenu.classList.remove('open'); return; }
+    currentAI = name; aiName.textContent = name;
+    Array.prototype.forEach.call(aiMenu.children, function (el) {
+      el.classList.toggle('sel', el.getAttribute('data-ai') === name);
+    });
+    aiMenu.classList.remove('open');
+    addSys(name + '(으)로 전환했어요');
+  }
+
+  // 이벤트
+  send.addEventListener('click', doSend);
+  input.addEventListener('input', autoGrow);
+  input.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); doSend(); }
+  });
+  aiBtn.addEventListener('click', function (e) { e.stopPropagation(); aiMenu.classList.toggle('open'); });
+  aiMenu.addEventListener('click', function (e) {
+    var it = e.target.closest('.ai-item'); if (it) setAI(it.getAttribute('data-ai'));
+  });
+  document.addEventListener('click', function () { aiMenu.classList.remove('open'); });
+  closeBtn.addEventListener('click', function () { window.close(); });
+
+  // 첫 인사
+  addMsg('haru', '안녕! 나 하루야 😊 무엇이든 물어봐. (지금은 목 모드라 진짜 답은 키 연결 후에!)');
+  input.focus();
+})();
+</script>
+</body>
+</html>
