@@ -238,12 +238,43 @@
       (userText.length > 18 ? userText.slice(0, 18) + '…' : userText) + '" 라고 했죠?)';
   }
 
+  var history = []; // 실제 대화 맥락 (role: user/assistant)
+
+  function addTyping() {
+    var row = document.createElement('div'); row.className = 'row haru';
+    var mini = document.createElement('div'); mini.className = 'mini'; mini.textContent = '하';
+    var b = document.createElement('div'); b.className = 'bubble'; b.textContent = '…';
+    row.appendChild(mini); row.appendChild(b); msgs.appendChild(row); scroll();
+    return row;
+  }
+  function removeTyping(row) { if (row && row.parentNode) row.parentNode.removeChild(row); }
+
   function doSend() {
     var v = input.value.trim();
     if (!v) return;
     addMsg('me', v);
+    history.push({ role: 'user', content: v });
     input.value = ''; autoGrow(); input.focus();
-    setTimeout(function () { addMsg('haru', mockReply(v)); }, 550);
+
+    if (window.harooChat && window.harooChat.sendChat) {
+      var typing = addTyping();
+      window.harooChat.sendChat(history).then(function (r) {
+        removeTyping(typing);
+        if (r && r.ok) {
+          addMsg('haru', r.text);
+          history.push({ role: 'assistant', content: r.text });
+        } else if (r && r.error === 'NO_KEY') {
+          addMsg('haru', 'API 키를 먼저 연결해줘! 위 "API 연결" 버튼을 눌러서 키를 넣으면 진짜로 대답할게 😊');
+        } else {
+          addMsg('haru', '앗, 오류가 났어: ' + ((r && r.error) || '알 수 없는 오류'));
+        }
+      }).catch(function (err) {
+        removeTyping(typing);
+        addMsg('haru', '연결 오류가 났어: ' + err);
+      });
+    } else {
+      setTimeout(function () { addMsg('haru', mockReply(v)); }, 550); // 폴백
+    }
   }
 
   function autoGrow() {
@@ -277,7 +308,7 @@
   refreshConn();
 
   // 첫 인사
-  addMsg('haru', '안녕! 나 하루야 😊 무엇이든 물어봐. (지금은 목 모드라 진짜 답은 키 연결 후에!)');
+  addMsg('haru', '안녕! 나 하루야 😊 무엇이든 물어봐. (대화하려면 위 "API 연결"에서 키를 넣어줘!)');
   input.focus();
 })();
 </script>

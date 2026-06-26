@@ -33,6 +33,8 @@ contextBridge.exposeInMainWorld('haroo', {
   alert: function () { ipcRenderer.send('haroo:alert'); },
   saveAiKey: function (provider, key) { return ipcRenderer.invoke('haroo:save-key', { provider: provider, key: key }); },
   aiKeyStatus: function () { return ipcRenderer.invoke('haroo:get-key-status'); },
+  setActiveAi: function (provider) { ipcRenderer.send('haroo:set-active-ai', { provider: provider }); },
+  setPersona: function (p) { ipcRenderer.send('haroo:set-persona', p); },
   onOpenAiSettings: function (cb) { openAiCb = cb; },
   ready: function () { ipcRenderer.send('haroo:ready'); }
 });

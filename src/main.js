@@ -30,6 +30,87 @@ try {
 function keyStatus() {
   return { claude: !!secrets.get('key.claude'), openai: !!secrets.get('key.openai') };
 }
+
+/* ---- 실제 API 호출 (메인이 키 들고 직접 호출 · CORS 없음) ---- */
+const https = require('https');
+const MODEL_CLAUDE = 'claude-haiku-4-5'; // 모델 안 맞으면 이 줄만 바꾸면 됨
+const MODEL_OPENAI = 'gpt-4o-mini';      // 모델 안 맞으면 이 줄만 바꾸면 됨
+const TONE = {
+  '다정': '다정하고 따뜻한 말투로',
+  '시크': '시크하고 간결한 말투로',
+  '발랄': '발랄하고 톡톡 튀는 말투로',
+  '차분': '차분하고 진중한 말투로',
+  '츤데레': '새침하지만 속으론 챙겨주는 츤데레 말투로',
+  '프로': '전문적이고 비서처럼 깔끔한 말투로'
+};
+function buildSystem() {
+  const p = store.get('persona') || {};
+  const name = p.name || '하루';
+  const role = p.role || '나의 업무 비서';
+  const tone = TONE[p.personality] || (p.personality ? (p.personality + ' 말투로') : '친근한 말투로');
+  return '당신은 "' + name + '"라는 이름의 데스크톱 업무 비서 캐릭터입니다. 맡은 역할은 "' + role + '"입니다. ' + tone + ' 한국어로 간결하게 대답합니다. 사용자의 업무·일정·아이디어 정리를 돕고, 모호하면 먼저 짧게 확인 질문을 합니다. 너무 길게 말하지 않습니다.';
+}
+
+function httpsJson(host, pathName, headers, bodyObj) {
+  return new Promise(function (resolve, reject) {
+    const body = JSON.stringify(bodyObj);
+    const req = https.request({
+      method: 'POST', host: host, path: pathName,
+      headers: Object.assign({ 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) }, headers)
+    }, function (res) {
+      let buf = '';
+      res.on('data', function (d) { buf += d; });
+      res.on('end', function () {
+        let json = null; try { json = JSON.parse(buf); } catch (e) {}
+        resolve({ status: res.statusCode, json: json, raw: buf });
+      });
+    });
+    req.on('error', reject);
+    req.write(body); req.end();
+  });
+}
+async function callClaude(key, messages) {
+  const r = await httpsJson('api.anthropic.com', '/v1/messages',
+    { 'x-api-key': key, 'anthropic-version': '2023-06-01' },
+    { model: MODEL_CLAUDE, max_tokens: 1024, system: buildSystem(), messages: messages });
+  if (r.status === 200 && r.json && r.json.content) {
+    return { ok: true, text: r.json.content.map(function (b) { return b.text || ''; }).join('') };
+  }
+  return { ok: false, error: (r.json && r.json.error && r.json.error.message) || ('HTTP ' + r.status) };
+}
+async function callOpenAI(key, messages) {
+  const msgs = [{ role: 'system', content: buildSystem() }].concat(messages);
+  const r = await httpsJson('api.openai.com', '/v1/chat/completions',
+    { 'authorization': 'Bearer ' + key },
+    { model: MODEL_OPENAI, messages: msgs });
+  if (r.status === 200 && r.json && r.json.choices && r.json.choices[0]) {
+    return { ok: true, text: r.json.choices[0].message.content };
+  }
+  return { ok: false, error: (r.json && r.json.error && r.json.error.message) || ('HTTP ' + r.status) };
+}
+function activeProvider() {
+  const st = keyStatus();
+  let a = secrets.get('active');
+  if (a !== 'claude' && a !== 'openai') a = st.claude ? 'claude' : (st.openai ? 'openai' : null);
+  if (a && !secrets.get('key.' + a)) a = st.claude ? 'claude' : (st.openai ? 'openai' : null);
+  return a;
+}
+ipcMain.on('haroo:set-active-ai', function (e, info) {
+  if (info && (info.provider === 'claude' || info.provider === 'openai')) secrets.set('active', info.provider);
+});
+ipcMain.on('haroo:set-persona', function (e, p) { if (p) store.set('persona', p); });
+ipcMain.handle('haroo:chat', async function (e, payload) {
+  const messages = (payload && payload.messages) || [];
+  const a = activeProvider();
+  if (!a) return { ok: false, error: 'NO_KEY' };
+  const key = secrets.get('key.' + a);
+  if (!key) return { ok: false, error: 'NO_KEY' };
+  try {
+    return a === 'claude' ? await callClaude(key, messages) : await callOpenAI(key, messages);
+  } catch (err) {
+    return { ok: false, error: String((err && err.message) || err) };
+  }
+});
 ipcMain.handle('haroo:save-key', function (e, info) {
   if (info && (info.provider === 'claude' || info.provider === 'openai')) {
     secrets.set('key.' + info.provider, String(info.key || '').trim());
@@ -276,12 +357,20 @@ const OVERLAY_JS = `
     var REAL = { claude: 'claude', gpt: 'openai' };
     document.addEventListener('click', function (e) {
       var sv = e.target.closest ? e.target.closest('[data-save]') : null;
-      if (!sv) return;
-      var sid = sv.getAttribute('data-save');
-      if (REAL[sid]) {
-        var inp = document.getElementById('aikin-' + sid);
-        var v = inp ? (inp.value || '').trim() : '';
-        if (v && window.haroo && window.haroo.saveAiKey) window.haroo.saveAiKey(REAL[sid], v);
+      if (sv) {
+        var sid = sv.getAttribute('data-save');
+        if (REAL[sid]) {
+          var inp = document.getElementById('aikin-' + sid);
+          var v = inp ? (inp.value || '').trim() : '';
+          if (v && window.haroo && window.haroo.saveAiKey) window.haroo.saveAiKey(REAL[sid], v);
+          if (window.haroo && window.haroo.setActiveAi) window.haroo.setActiveAi(REAL[sid]); // 연결=사용 중
+        }
+        return;
+      }
+      var us = e.target.closest ? e.target.closest('[data-use]') : null;
+      if (us) {
+        var uid = us.getAttribute('data-use');
+        if (REAL[uid] && window.haroo && window.haroo.setActiveAi) window.haroo.setActiveAi(REAL[uid]);
       }
     }, true);
     if (window.haroo && window.haroo.aiKeyStatus) {
@@ -301,6 +390,18 @@ const OVERLAY_JS = `
         try { if (typeof gotoPage === 'function') gotoPage('character'); } catch (_) {}
       });
     }
+    // 캐릭터 설정(이름/역할/말투) → 메인 시스템 프롬프트에 반영
+    function reportPersona() {
+      try {
+        if (typeof store !== 'undefined' && store.char && window.haroo && window.haroo.setPersona) {
+          window.haroo.setPersona({ name: store.char.name, role: store.char.role, personality: store.char.personality });
+        }
+      } catch (_) {}
+    }
+    document.addEventListener('click', function (e) {
+      if (e.target.closest && e.target.closest('#saveChar')) setTimeout(reportPersona, 0);
+    }, false);
+    reportPersona();
   })();
 
   if (window.haroo && window.haroo.ready) window.haroo.ready();
