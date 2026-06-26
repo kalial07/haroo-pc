@@ -95,8 +95,10 @@ function refreshIdle() {
  * ============================================================ */
 const OVERLAY_CSS = `
   html, body { background: transparent !important; }
-  /* 가짜 데스크톱 크롬 + 생활공간 디오라마 제거 → 진짜 바탕화면 위에 하루만 */
-  #desktop, #taskbar, .v0badge, .deskhint, .floor, #scenery { display: none !important; }
+  /* 가짜 데스크톱 크롬만 제거 → 진짜 바탕화면 위에 하루 + 생활공간 */
+  #desktop, #taskbar, .v0badge, .deskhint, .floor { display: none !important; }
+  /* 생활공간(카페/오피스/집)을 실제 작업영역 바닥에 안착 (z-index 39 = 캐릭터 뒤) */
+  #scenery { bottom: 0 !important; }
 `;
 
 const OVERLAY_JS = `
