@@ -99,6 +99,70 @@ ipcMain.on('haroo:set-active-ai', function (e, info) {
   if (info && (info.provider === 'claude' || info.provider === 'openai')) secrets.set('active', info.provider);
 });
 ipcMain.on('haroo:set-persona', function (e, p) { if (p) store.set('persona', p); });
+const MODEL_IMAGE = 'gpt-image-1'; // 인형 이미지 생성 모델
+function multipartBody(fields, file) {
+  const boundary = '----haroo' + Date.now().toString(16);
+  const parts = [];
+  Object.keys(fields).forEach(function (k) {
+    parts.push(Buffer.from('--' + boundary + '\r\nContent-Disposition: form-data; name="' + k + '"\r\n\r\n' + fields[k] + '\r\n'));
+  });
+  parts.push(Buffer.from('--' + boundary + '\r\nContent-Disposition: form-data; name="' + file.name + '"; filename="' + file.filename + '"\r\nContent-Type: ' + file.contentType + '\r\n\r\n'));
+  parts.push(file.buffer);
+  parts.push(Buffer.from('\r\n--' + boundary + '--\r\n'));
+  return { boundary: boundary, body: Buffer.concat(parts) };
+}
+function genDoll(key, imageB64, prompt) {
+  const buf = Buffer.from(imageB64, 'base64');
+  const full = '참고 이미지를 귀엽고 단순한 치비 마스코트 인형(봉제인형)으로 바꿔줘. 전신, 정면, 가운데 정렬, 동글동글한 형태, 부드러운 파스텔 색, 깔끔하고 굵은 외곽선, 플랫한 스타일, 단색 흰색 배경(나중에 제거함), 인형 주위에 충분한 여백을 두고 화면 가장자리에 닿지 않게, 글자 없음. ' + (prompt || '');
+  const mp = multipartBody(
+    { model: MODEL_IMAGE, prompt: full, size: '1024x1024', background: 'transparent', output_format: 'png', quality: 'low', n: '1' },
+    { name: 'image', filename: 'ref.png', contentType: 'image/png', buffer: buf }
+  );
+  return new Promise(function (resolve) {
+    const req = https.request({
+      method: 'POST', host: 'api.openai.com', path: '/v1/images/edits',
+      headers: { 'authorization': 'Bearer ' + key, 'content-type': 'multipart/form-data; boundary=' + mp.boundary, 'content-length': mp.body.length }
+    }, function (res) {
+      let b = '';
+      res.on('data', function (d) { b += d; });
+      res.on('end', function () {
+        let j = null; try { j = JSON.parse(b); } catch (e) {}
+        if (res.statusCode === 200 && j && j.data && j.data[0] && j.data[0].b64_json) resolve({ ok: true, b64: j.data[0].b64_json });
+        else resolve({ ok: false, error: (j && j.error && j.error.message) || ('HTTP ' + res.statusCode) });
+      });
+    });
+    req.on('error', function (e) { resolve({ ok: false, error: String((e && e.message) || e) }); });
+    req.write(mp.body); req.end();
+  });
+}
+ipcMain.handle('haroo:gen-doll', async function (e, p) {
+  const st = keyStatus();
+  if (!st.openai) return { ok: false, error: 'ChatGPT(OpenAI) 키를 먼저 연결해줘 (인형 생성은 OpenAI 이미지 사용)' };
+  if (!p || !p.imageBase64) return { ok: false, error: '참고 이미지가 필요해요' };
+  try { return await genDoll(secrets.get('key.openai'), p.imageBase64, p.prompt); }
+  catch (err) { return { ok: false, error: String((err && err.message) || err) }; }
+});
+function dollsList() { return store.get('dolls') || []; }
+function activeDollId() { return store.get('dollActive') || 'default'; }
+function activeDollImg() {
+  var id = activeDollId(); if (id === 'default') return null;
+  var d = dollsList().filter(function (x) { return String(x.id) === String(id); })[0];
+  return d ? d.img : null;
+}
+ipcMain.handle('haroo:get-doll', function () { return activeDollImg(); });
+ipcMain.handle('haroo:get-dolls', function () { return { dolls: dollsList(), active: activeDollId() }; });
+ipcMain.handle('haroo:add-doll', function (e, p) {
+  if (!p || !p.b64) return { dolls: dollsList(), active: activeDollId() };
+  var arr = dollsList(); var id = Date.now();
+  arr.push({ id: id, name: (p.name || '인형'), img: p.b64 });
+  store.set('dolls', arr); store.set('dollActive', id);
+  return { dolls: arr, active: id };
+});
+ipcMain.handle('haroo:set-active-doll', function (e, p) {
+  store.set('dollActive', (p && p.id != null) ? p.id : 'default');
+  return { img: activeDollImg(), active: activeDollId() };
+});
+
 ipcMain.handle('haroo:chat', async function (e, payload) {
   const messages = (payload && payload.messages) || [];
   const a = activeProvider();
@@ -150,6 +214,7 @@ let actionMode = false;           // 현재 액션 타임인가
 let idleTimer = null;             // 10초 무반응 타이머
 let pendingAlert = false;         // 풀스크린이라 보류된 알림
 let chatOpen = false;             // 채팅창 열려있는 동안엔 하루가 안 잠듦
+let winOpen = false;              // 대시보드/설정 창 열려있는 동안에도 안 잠듦
 
 /* ---- 활성 디스플레이의 작업영역(작업표시줄 제외, DIP 좌표) ---- */
 function activeWorkArea() {
@@ -187,7 +252,7 @@ function enterAction(reason, force) {
 /* ---- 바탕화면 레이어로 복귀 ---- */
 function exitAction() {
   if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
-  if (chatOpen) return;                                // 채팅 중엔 안 가라앉음
+  if (chatOpen || winOpen) return;                     // 채팅/설정창 열림 중엔 안 가라앉음
   if (!win || win.isDestroyed()) { actionMode = false; return; }
   actionMode = false;
   win.setAlwaysOnTop(false);                         // 다른 창이 덮도록
@@ -198,7 +263,7 @@ function exitAction() {
 /* ---- 무반응 타이머 갱신 (건드림/드래그/새 알림마다 호출) ---- */
 function refreshIdle() {
   if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
-  if (chatOpen) return;                  // 채팅창 열려있는 동안엔 타이머 안 검
+  if (chatOpen || winOpen) return;       // 채팅/설정창 열림 중엔 타이머 안 검
   idleTimer = setTimeout(exitAction, IDLE_MS);
 }
 
@@ -206,6 +271,24 @@ function refreshIdle() {
  *  오버레이 적응 (데모 페이지에 주입)
  * ============================================================ */
 const OVERLAY_CSS = `
+  .haru-spin{display:inline-block;width:13px;height:13px;vertical-align:-2px;margin-right:6px;
+    border:2px solid rgba(0,0,0,.15);border-top-color:var(--coral,#E58A6B);border-radius:50%;
+    animation:harooSpin .8s linear infinite}
+  @keyframes harooSpin{to{transform:rotate(360deg)}}
+
+  /* 하누 인형: 오른손(arm-r)에 들림 — 어깨축으로 arm-r과 동일 회전 */
+  .char-body .haru-doll{
+    position:absolute;
+    left:50px; top:62px; width:36px; height:45px;   /* ← 위치/크기 (조정용) */
+    z-index:27; pointer-events:none; object-fit:contain;  /* 비율 유지 → 안 늘어남 */
+    transform-box:fill-box;
+    transform-origin:-0.23px -1.48px;               /* arm-r 어깨점 (top에 연동) */
+  }
+  #charLayer[data-state="walk"]     .haru-doll{ animation:stepA .46s ease-in-out infinite; }
+  #charLayer[data-state="dragging"] .haru-doll{ transform:rotate(28deg); }
+  #charLayer[data-state="eat"]      .haru-doll{ animation:sip 1.5s ease-in-out infinite; }
+  #charLayer[data-state="work"]     .haru-doll{ animation:typ .32s .16s ease-in-out infinite; }
+
   html, body { background: transparent !important; }
   /* 가짜 데스크톱 크롬만 제거 → 진짜 바탕화면 위에 하루 + 생활공간 */
   #desktop, #taskbar, .v0badge, .deskhint, .floor { display: none !important; }
@@ -251,6 +334,7 @@ const OVERLAY_JS = `
   // 커서가 하루 위에 오면 창을 잠깐 '실체화'(클릭 수신) → 클릭이 하루에 닿을 수 있게.
   // 빈 곳에선 통과 유지. 두 레이어 모두 동일.
   window.addEventListener('mousemove', function (e) {
+    if (window.__harooWinOpen) return;   // 창 열림 동안엔 전체 클릭 (hit-test 스킵)
     var over = interactiveAt(e.clientX, e.clientY);
     setInteractive(over);
     if (over && actionMode) activity(); // 액션 중일 때만 타이머 갱신
@@ -404,6 +488,216 @@ const OVERLAY_JS = `
     reportPersona();
   })();
 
+  // ── 7) 하누 인형을 오른손(arm-r) 옆에 부착 ──
+  (function () {
+    function placeDoll() {
+      var body = document.querySelector('.char-body');
+      if (!body || body.querySelector('.haru-doll')) return;
+      var arm = body.querySelector('.arm-r');
+      var doll = document.createElement('img');
+      doll.className = 'part haru-doll';
+      doll.alt = '';
+      doll.src = 'haru-doll.png'; // renderer/haru-doll.png
+      if (arm && arm.nextSibling) body.insertBefore(doll, arm.nextSibling);
+      else body.appendChild(doll);
+    }
+    placeDoll();
+    // 저장된(생성한) 인형이 있으면 적용
+    if (window.haroo && window.haroo.getDoll) {
+      window.haroo.getDoll().then(function (b64) {
+        if (b64) { var d = document.querySelector('.char-body .haru-doll'); if (d) d.src = 'data:image/png;base64,' + b64; }
+      }).catch(function () {});
+    }
+    // char-body가 다시 그려질 경우 대비 (안전망)
+    try {
+      var host = document.querySelector('.char-svg') || document.body;
+      var mo = new MutationObserver(function () { placeDoll(); });
+      mo.observe(host, { childList: true, subtree: true });
+    } catch (_) {}
+  })();
+
+  // ── 8) 캐릭터/인형 생성 UI 재구성 (하루=메인, 캐릭터 생성=추후, 인형 생성=현 UI) ──
+  (function () {
+    function relabelGen() {
+      var t = document.querySelector('#charGen .win-title');
+      if (t) t.innerHTML = '<span class="wt-ico">🧸</span> 인형 생성';
+      var intro = document.querySelector('#charGen .gen-intro');
+      if (intro) intro.innerHTML = '이름·외형을 정하거나 참고 이미지를 올리면, 하루가 <b>손에 들고 다닐 인형</b>으로 만들어줘요.' +
+        '<span class="gen-demo">데모 · 실제 생성은 PC판에서 API 연동</span>';
+      var go = document.getElementById('genGo'); if (go) go.textContent = '✨ 인형 만들기';
+      var gName = document.getElementById('gName'); if (gName) gName.placeholder = '예: 하누';
+      var gP = document.getElementById('gPrompt'); if (gP) gP.placeholder = '예: 파스텔톤, 동글동글, 큰 눈';
+    }
+    relabelGen();
+
+    function fixCards() {
+      var list = document.getElementById('charList'); if (!list) return;
+      var nm = list.querySelector('#clAdd .cl-name'); if (nm) nm.textContent = '인형 생성';
+      var ic = list.querySelector('#clAdd .plus'); if (ic) ic.textContent = '🧸';
+      if (!list.querySelector('#clSoon')) {
+        var soon = document.createElement('div');
+        soon.className = 'cl-card cl-add'; soon.id = 'clSoon';
+        soon.style.opacity = '.55'; soon.style.cursor = 'not-allowed'; soon.style.borderStyle = 'solid';
+        soon.innerHTML = '<div class="plus">🔒</div><div class="cl-name" style="color:inherit">캐릭터 생성<br><span style="font-size:9px;opacity:.8">추후 제공</span></div>';
+        soon.addEventListener('click', function (e) {
+          e.stopPropagation();
+          try { if (typeof toast === 'function') toast('캐릭터 생성은 곧 제공돼요!', '🔒'); } catch (_) {}
+        });
+        var clAdd = list.querySelector('#clAdd');
+        if (clAdd && clAdd.nextSibling) list.insertBefore(soon, clAdd.nextSibling);
+        else list.appendChild(soon);
+      }
+    }
+    if (typeof renderCharList === 'function' && !renderCharList.__wrapped) {
+      var _orig = renderCharList;
+      window.renderCharList = function () { _orig.apply(this, arguments); try { fixCards(); } catch (_) {} };
+      window.renderCharList.__wrapped = true;
+    }
+    fixCards();
+  })();
+
+  // ── 9) 인형 생성: 참고이미지+프롬프트 → OpenAI 이미지 → 하루 손 인형 교체 ──
+  (function () {
+    function processDoll(b64) {
+      return new Promise(function (res) {
+        var img = new Image();
+        img.onload = function () {
+          var w0 = img.width, h0 = img.height;
+          var c0 = document.createElement('canvas'); c0.width = w0; c0.height = h0;
+          var x0 = c0.getContext('2d'); x0.drawImage(img, 0, 0);
+          var px;
+          try { px = x0.getImageData(0, 0, w0, h0).data; } catch (e) { res(b64); return; }
+          // (1) 배경 불투명 → 코너색 제거
+          if (px[3] > 200) {
+            var cr = px[0], cg = px[1], cb = px[2];
+            var dd = x0.getImageData(0, 0, w0, h0), p2 = dd.data;
+            for (var i = 0; i < p2.length; i += 4) {
+              if (Math.abs(p2[i] - cr) + Math.abs(p2[i + 1] - cg) + Math.abs(p2[i + 2] - cb) < 60) p2[i + 3] = 0;
+            }
+            x0.putImageData(dd, 0, 0); px = dd.data;
+          }
+          // (2) 불투명 영역 bbox 찾기
+          var minX = w0, minY = h0, maxX = 0, maxY = 0, found = false;
+          for (var y = 0; y < h0; y++) {
+            for (var xx = 0; xx < w0; xx++) {
+              if (px[(y * w0 + xx) * 4 + 3] > 20) { found = true; if (xx < minX) minX = xx; if (xx > maxX) maxX = xx; if (y < minY) minY = y; if (y > maxY) maxY = y; }
+            }
+          }
+          if (!found) { res(c0.toDataURL('image/png').split(',')[1]); return; }
+          var cw = maxX - minX + 1, ch = maxY - minY + 1;
+          // (3) 정사각 + 14% 여백에 중앙 배치 → 머리·발 안 잘림
+          var side = Math.max(cw, ch);
+          var pad = Math.round(side * 0.14);
+          var out = side + pad * 2;
+          var scale = Math.min(1, 256 / out);
+          var fw = Math.round(out * scale);
+          var cc = document.createElement('canvas'); cc.width = fw; cc.height = fw;
+          var xc = cc.getContext('2d');
+          var ox = (out - cw) / 2, oy = (out - ch) / 2;
+          xc.drawImage(c0, minX, minY, cw, ch, ox * scale, oy * scale, cw * scale, ch * scale);
+          res(cc.toDataURL('image/png').split(',')[1]);
+        };
+        img.onerror = function () { res(b64); };
+        img.src = 'data:image/png;base64,' + b64;
+      });
+    }
+    function applyDoll(b64) {
+      var d = document.querySelector('.char-body .haru-doll');
+      if (d) d.src = 'data:image/png;base64,' + b64;
+    }
+    async function genDollRun() {
+      var promptEl = document.getElementById('gPrompt');
+      var prompt = (promptEl && promptEl.value || '').trim();
+      if (typeof genImg === 'undefined' || !genImg) { try { if (typeof toast === 'function') toast('참고 이미지를 올려주세요', '🖼️'); } catch (_) {} return; }
+      var up = document.getElementById('genUp'), prog = document.getElementById('genProg'), status = document.getElementById('genStatus'), slots = document.getElementById('genSlots');
+      if (up) up.style.display = 'none';
+      if (prog) prog.style.display = '';
+      if (slots) slots.innerHTML = '';
+      if (status) status.innerHTML = '<span class="haru-spin"></span>인형 생성 중… (최대 1분)';
+      try { if (typeof setState === 'function') setState('thinking', 999999); } catch (_) {}
+      var refB64 = String(genImg).split(',')[1];
+      try {
+        var r = await window.haroo.genDoll({ imageBase64: refB64, prompt: prompt });
+        if (!r || !r.ok) {
+          if (status) status.textContent = '실패: ' + ((r && r.error) || '오류');
+          try { if (typeof setState === 'function') setState('idle'); } catch (_) {}
+          setTimeout(function () { if (prog) prog.style.display = 'none'; if (up) up.style.display = ''; }, 3000);
+          return;
+        }
+        if (status) status.innerHTML = '<span class="haru-spin"></span>배경 정리 중…';
+        var clean = await processDoll(r.b64);
+        applyDoll(clean);
+        var nameEl = document.getElementById('gName');
+        var nm = (nameEl && nameEl.value || '').trim() || '인형';
+        try { await window.haroo.addDoll({ name: nm, b64: clean }); if (window.renderDollList) window.renderDollList(); } catch (_) {}
+        if (status) status.textContent = '완성! 하루가 인형을 들었어요 🧸';
+        try { if (typeof setState === 'function') setState('happy', 1400); } catch (_) {}
+        try { if (typeof toast === 'function') toast('인형 완성!', '🧸'); } catch (_) {}
+        setTimeout(function () { try { if (typeof closeWin === 'function') closeWin('charGen'); if (typeof genReset === 'function') genReset(); } catch (_) {} }, 1300);
+      } catch (e) {
+        if (status) status.textContent = '오류: ' + e;
+      }
+    }
+    var go = document.getElementById('genGo');
+    if (go) go.onclick = genDollRun;
+  })();
+
+  // ── 10) 인형 리스트 (기본 하누 + 만든 인형들, 카드 클릭 → 교체) ──
+  (function () {
+    function injectListUI() {
+      var form = document.querySelector('.set-form');
+      if (!form || document.getElementById('dollList')) return;
+      var sec = document.createElement('div');
+      sec.innerHTML = '<div class="sect-div"></div><div class="fld"><label>🧸 인형 리스트 <span style="color:var(--ink-faint);font-weight:400">· 누르면 하루가 바꿔 들어요</span></label><div class="char-list" id="dollList"></div></div>';
+      while (sec.firstChild) form.appendChild(sec.firstChild);
+    }
+    window.renderDollList = function () {
+      var wrap = document.getElementById('dollList');
+      if (!wrap || !window.haroo || !window.haroo.getDolls) return;
+      window.haroo.getDolls().then(function (st) {
+        var dolls = (st && st.dolls) || [], active = (st && st.active != null) ? String(st.active) : 'default';
+        var html = '<div class="cl-card' + (active === 'default' ? ' on' : '') + '" data-doll="default"><div class="cl-av"><img src="haru-doll.png" style="width:100%;height:100%;object-fit:contain"></div><div class="cl-name">하누</div></div>';
+        dolls.forEach(function (d) {
+          html += '<div class="cl-card' + (active === String(d.id) ? ' on' : '') + '" data-doll="' + d.id + '"><div class="cl-av"><img src="data:image/png;base64,' + d.img + '" style="width:100%;height:100%;object-fit:contain"></div><div class="cl-name">' + (d.name || '인형') + '</div></div>';
+        });
+        wrap.innerHTML = html;
+        Array.prototype.forEach.call(wrap.querySelectorAll('[data-doll]'), function (card) {
+          card.onclick = function () {
+            var id = card.getAttribute('data-doll');
+            window.haroo.setActiveDoll(id === 'default' ? 'default' : Number(id)).then(function (r) {
+              var d = document.querySelector('.char-body .haru-doll');
+              if (d) d.src = (r && r.img) ? ('data:image/png;base64,' + r.img) : 'haru-doll.png';
+              window.renderDollList();
+            });
+          };
+        });
+      }).catch(function () {});
+    };
+    injectListUI();
+    window.renderDollList();
+  })();
+
+  // ── 11) 대시보드/설정 창 열림 동안 하루 최상위 유지 (.win.show 관찰) ──
+  (function () {
+    function anyOpen() { return !!document.querySelector('.win.show'); }
+    var last = null;
+    function check() {
+      var open = anyOpen();
+      if (open === last) return; last = open;
+      window.__harooWinOpen = open;
+      if (!window.haroo) return;
+      if (open && window.haroo.uiOpen) window.haroo.uiOpen();
+      else if (!open && window.haroo.uiClosed) window.haroo.uiClosed();
+    }
+    try {
+      var mo = new MutationObserver(check);
+      Array.prototype.forEach.call(document.querySelectorAll('.win'), function (w) {
+        mo.observe(w, { attributes: true, attributeFilter: ['class'] });
+      });
+    } catch (_) {}
+    check();
+  })();
+
   if (window.haroo && window.haroo.ready) window.haroo.ready();
 })();
 `;
@@ -478,6 +772,22 @@ ipcMain.on('haroo:set-interactive', function (e, v) {
 });
 // 보이는 하루를 클릭 → 액션 타임으로 깨우기 (이미 액션이면 타이머 갱신)
 ipcMain.on('haroo:wake', function () { enterAction('click', true); });
+ipcMain.on('haroo:ui-open', function () {
+  winOpen = true;
+  if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+  if (win && !win.isDestroyed()) {
+    actionMode = true;
+    win.setAlwaysOnTop(true, 'screen-saver');
+    win.setIgnoreMouseEvents(false);   // 창 열림 동안엔 전체 클릭 가능 (hit-test 끔)
+    win.show(); win.focus();
+    if (win.webContents) win.webContents.send('haroo:action-mode', true);
+  }
+});
+ipcMain.on('haroo:ui-closed', function () {
+  winOpen = false;
+  if (win && !win.isDestroyed()) win.setIgnoreMouseEvents(true, { forward: true }); // hit-test 복귀
+  refreshIdle();
+});
 // 건드림/드래그 보고 → 10초 타이머 갱신
 ipcMain.on('haroo:activity', function () { if (actionMode) refreshIdle(); });
 // 알림 발생 시 액션 타임으로 깨우기 (미래 AI 알림 연결점 · 풀스크린이면 자동 보류)
@@ -503,6 +813,7 @@ function openChat() {
       contextIsolation: true, nodeIntegration: false, backgroundThrottling: false
     }
   });
+  chatWin.setAlwaysOnTop(true, 'screen-saver'); // 채팅창은 열려있는 동안 항상 위
   chatWin.loadFile(CHAT);
   chatWin.once('ready-to-show', function () { chatWin.show(); chatWin.focus(); });
   chatOpen = true;

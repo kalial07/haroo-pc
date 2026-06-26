@@ -35,6 +35,13 @@ contextBridge.exposeInMainWorld('haroo', {
   aiKeyStatus: function () { return ipcRenderer.invoke('haroo:get-key-status'); },
   setActiveAi: function (provider) { ipcRenderer.send('haroo:set-active-ai', { provider: provider }); },
   setPersona: function (p) { ipcRenderer.send('haroo:set-persona', p); },
+  genDoll: function (payload) { return ipcRenderer.invoke('haroo:gen-doll', payload); },
+  getDoll: function () { return ipcRenderer.invoke('haroo:get-doll'); },
+  getDolls: function () { return ipcRenderer.invoke('haroo:get-dolls'); },
+  addDoll: function (p) { return ipcRenderer.invoke('haroo:add-doll', p); },
+  setActiveDoll: function (id) { return ipcRenderer.invoke('haroo:set-active-doll', { id: id }); },
+  uiOpen: function () { ipcRenderer.send('haroo:ui-open'); },
+  uiClosed: function () { ipcRenderer.send('haroo:ui-closed'); },
   onOpenAiSettings: function (cb) { openAiCb = cb; },
   ready: function () { ipcRenderer.send('haroo:ready'); }
 });
