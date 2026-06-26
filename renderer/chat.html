@@ -156,6 +156,12 @@
     font-size:10px; color:#a86a3e; background:#ffe9d6;
     padding:2px 7px; border-radius:999px; margin-left:2px;
   }
+  .conn{ -webkit-app-region:no-drag; display:flex; align-items:center; }
+  .conn-btn{ height:30px; padding:0 12px; border:1px solid var(--me); border-radius:999px;
+    background:#eef4ff; color:var(--me); font-family:var(--font); font-size:12.5px; font-weight:600; cursor:pointer; }
+  .conn-btn:hover{ background:var(--me); color:#fff; }
+  .conn-on{ height:30px; display:inline-flex; align-items:center; gap:5px; padding:0 12px;
+    border-radius:999px; background:#e1f5ee; color:#0f6e56; font-size:12.5px; font-weight:600; }
 </style>
 </head>
 <body>
@@ -167,15 +173,9 @@
       <div class="status">대화 모드 <span class="badge">목(mock)</span></div>
     </div>
     <div class="spacer"></div>
-    <div class="ai">
-      <button class="ai-btn" id="aiBtn">
-        <span class="dot"></span><span id="aiName">Claude</span><span class="caret">▼</span>
-      </button>
-      <div class="ai-menu" id="aiMenu">
-        <div class="ai-item sel" data-ai="Claude"><span class="dot" style="width:7px;height:7px;border-radius:50%;background:#d97757;"></span>Claude<span class="chk">✓</span></div>
-        <div class="ai-item" data-ai="ChatGPT"><span class="dot" style="width:7px;height:7px;border-radius:50%;background:#10a37f;"></span>ChatGPT<span class="chk">✓</span></div>
-        <div class="ai-item" data-ai="Gemini"><span class="dot" style="width:7px;height:7px;border-radius:50%;background:#4285f4;"></span>Gemini<span class="chk">✓</span></div>
-      </div>
+    <div class="conn">
+      <button class="conn-btn" id="connBtn">API 연결</button>
+      <span class="conn-on" id="connOn" style="display:none">● 활성화 중</span>
     </div>
     <button class="close" id="closeBtn" title="닫기">✕</button>
   </div>
@@ -193,11 +193,10 @@
   var msgs = document.getElementById('msgs');
   var input = document.getElementById('input');
   var send = document.getElementById('send');
-  var aiBtn = document.getElementById('aiBtn');
-  var aiMenu = document.getElementById('aiMenu');
-  var aiName = document.getElementById('aiName');
+  var connBtn = document.getElementById('connBtn');
+  var connOn = document.getElementById('connOn');
   var closeBtn = document.getElementById('closeBtn');
-  var currentAI = 'Claude';
+  var currentAI = '하루';
 
   function now() {
     var d = new Date();
@@ -252,15 +251,15 @@
     input.style.height = Math.min(120, input.scrollHeight) + 'px';
   }
 
-  // AI 전환
-  function setAI(name) {
-    if (name === currentAI) { aiMenu.classList.remove('open'); return; }
-    currentAI = name; aiName.textContent = name;
-    Array.prototype.forEach.call(aiMenu.children, function (el) {
-      el.classList.toggle('sel', el.getAttribute('data-ai') === name);
-    });
-    aiMenu.classList.remove('open');
-    addSys(name + '(으)로 전환했어요');
+  // ── API 연결 상태 ──
+  // 키 있음 → "● 활성화 중" 표시 / 없음 → "API 연결" 버튼
+  function refreshConn() {
+    if (!(window.harooChat && window.harooChat.getKeyStatus)) return;
+    window.harooChat.getKeyStatus().then(function (st) {
+      var on = !!(st && (st.claude || st.openai));
+      connBtn.style.display = on ? 'none' : '';
+      connOn.style.display = on ? '' : 'none';
+    }).catch(function () {});
   }
 
   // 이벤트
@@ -269,12 +268,13 @@
   input.addEventListener('keydown', function (e) {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); doSend(); }
   });
-  aiBtn.addEventListener('click', function (e) { e.stopPropagation(); aiMenu.classList.toggle('open'); });
-  aiMenu.addEventListener('click', function (e) {
-    var it = e.target.closest('.ai-item'); if (it) setAI(it.getAttribute('data-ai'));
+  connBtn.addEventListener('click', function () {
+    if (window.harooChat && window.harooChat.openAiSettings) window.harooChat.openAiSettings();
   });
-  document.addEventListener('click', function () { aiMenu.classList.remove('open'); });
   closeBtn.addEventListener('click', function () { window.close(); });
+  // 설정에서 키 연결하고 돌아오면 상태 갱신
+  window.addEventListener('focus', refreshConn);
+  refreshConn();
 
   // 첫 인사
   addMsg('haru', '안녕! 나 하루야 😊 무엇이든 물어봐. (지금은 목 모드라 진짜 답은 키 연결 후에!)');

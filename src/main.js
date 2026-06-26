@@ -18,6 +18,37 @@ try {
   store = { get: (k, d) => (k in mem ? mem[k] : d), set: (k, v) => { mem[k] = v; } };
 }
 
+// API 키 전용 스토어 (가벼운 암호화, 이 PC에만) + IPC
+let secrets;
+try {
+  const Store = require('electron-store');
+  secrets = new Store({ name: 'haroo-secrets', encryptionKey: 'haroo-local-v1' });
+} catch (e) {
+  const m2 = {};
+  secrets = { get: (k, d) => (k in m2 ? m2[k] : d), set: (k, v) => { m2[k] = v; }, delete: (k) => { delete m2[k]; } };
+}
+function keyStatus() {
+  return { claude: !!secrets.get('key.claude'), openai: !!secrets.get('key.openai') };
+}
+ipcMain.handle('haroo:save-key', function (e, info) {
+  if (info && (info.provider === 'claude' || info.provider === 'openai')) {
+    secrets.set('key.' + info.provider, String(info.key || '').trim());
+  }
+  return keyStatus();
+});
+ipcMain.handle('haroo:get-key-status', function () { return keyStatus(); });
+ipcMain.handle('haroo:clear-key', function (e, info) {
+  if (info && (info.provider === 'claude' || info.provider === 'openai')) secrets.delete('key.' + info.provider);
+  return keyStatus();
+});
+// 채팅창 'API 연결' → 오버레이(하루 창)에 설정 열기 신호
+ipcMain.on('haroo:open-ai-settings', function () {
+  if (win && !win.isDestroyed() && win.webContents) {
+    win.showInactive();
+    win.webContents.send('haroo:open-ai-settings');
+  }
+});
+
 const RENDERER = path.join(__dirname, '..', 'renderer', 'haroo-erp-v0.html');
 const CHAT = path.join(__dirname, '..', 'renderer', 'chat.html');
 
@@ -205,6 +236,73 @@ const OVERLAY_JS = `
     });
   }
 
+  // ── 6) 대화 AI 연결: Claude/ChatGPT(gpt)만 노출 + 실제 키 저장 ──
+  (function () {
+    try {
+      if (typeof AI_PROVIDERS !== 'undefined' && Array.isArray(AI_PROVIDERS)) {
+        for (var i = AI_PROVIDERS.length - 1; i >= 0; i--) {
+          if (AI_PROVIDERS[i].id !== 'claude' && AI_PROVIDERS[i].id !== 'gpt') AI_PROVIDERS.splice(i, 1);
+        }
+      }
+    } catch (_) {}
+    // 연결됨 행에 '수정' 버튼 추가 (renderAiList 래핑 → 매 렌더 후 부착)
+    try {
+      if (typeof renderAiList === 'function' && !renderAiList.__wrapped) {
+        var _origRender = renderAiList;
+        window.renderAiList = function () {
+          _origRender.apply(this, arguments);
+          try { addEditBtns(); } catch (_) {}
+        };
+        window.renderAiList.__wrapped = true;
+      }
+    } catch (_) {}
+    function addEditBtns() {
+      var wrap = document.getElementById('aiList'); if (!wrap) return;
+      var tags = wrap.querySelectorAll('.ai-on-tag');
+      Array.prototype.forEach.call(tags, function (tag) {
+        var act = tag.parentNode; if (!act || act.querySelector('[data-edit]')) return;
+        var useBtn = act.querySelector('[data-use]');
+        var id = useBtn ? useBtn.getAttribute('data-use') : null; if (!id) return;
+        var btn = document.createElement('button');
+        btn.className = 'ai-btn'; btn.setAttribute('data-edit', id);
+        btn.textContent = '수정'; btn.style.marginLeft = '4px';
+        btn.onclick = function () {
+          var box = document.getElementById('aikey-' + id);
+          if (box) box.style.display = (box.style.display === 'flex') ? 'none' : 'flex';
+        };
+        act.appendChild(btn);
+      });
+    }
+    var REAL = { claude: 'claude', gpt: 'openai' };
+    document.addEventListener('click', function (e) {
+      var sv = e.target.closest ? e.target.closest('[data-save]') : null;
+      if (!sv) return;
+      var sid = sv.getAttribute('data-save');
+      if (REAL[sid]) {
+        var inp = document.getElementById('aikin-' + sid);
+        var v = inp ? (inp.value || '').trim() : '';
+        if (v && window.haroo && window.haroo.saveAiKey) window.haroo.saveAiKey(REAL[sid], v);
+      }
+    }, true);
+    if (window.haroo && window.haroo.aiKeyStatus) {
+      window.haroo.aiKeyStatus().then(function (st) {
+        try {
+          if (typeof store !== 'undefined' && store.ai && store.ai.connected) {
+            if (st && st.claude) store.ai.connected['claude'] = true;
+            if (st && st.openai) store.ai.connected['gpt'] = true;
+            if (typeof renderAiList === 'function') renderAiList();
+          }
+        } catch (_) {}
+      }).catch(function () {});
+    }
+    if (window.haroo && window.haroo.onOpenAiSettings) {
+      window.haroo.onOpenAiSettings(function () {
+        try { if (typeof openWin === 'function') openWin('settings'); } catch (_) {}
+        try { if (typeof gotoPage === 'function') gotoPage('character'); } catch (_) {}
+      });
+    }
+  })();
+
   if (window.haroo && window.haroo.ready) window.haroo.ready();
 })();
 `;
@@ -299,7 +397,10 @@ function openChat() {
     frame: false, transparent: true, backgroundColor: '#00000000',
     resizable: true, movable: true, hasShadow: true, fullscreenable: false,
     show: false,
-    webPreferences: { contextIsolation: true, nodeIntegration: false, backgroundThrottling: false }
+    webPreferences: {
+      preload: path.join(__dirname, 'chat-preload.js'),
+      contextIsolation: true, nodeIntegration: false, backgroundThrottling: false
+    }
   });
   chatWin.loadFile(CHAT);
   chatWin.once('ready-to-show', function () { chatWin.show(); chatWin.focus(); });

@@ -7,6 +7,8 @@ let actionCb = null;
 
 ipcRenderer.on('haroo:tray', function (e, cmd) { if (trayCb) trayCb(cmd); });
 ipcRenderer.on('haroo:reflow', function () { if (reflowCb) reflowCb(); });
+let openAiCb = null;
+ipcRenderer.on('haroo:open-ai-settings', function () { if (openAiCb) openAiCb(); });
 ipcRenderer.on('haroo:action-mode', function (e, on) { if (actionCb) actionCb(!!on); });
 
 contextBridge.exposeInMainWorld('haroo', {
@@ -29,5 +31,8 @@ contextBridge.exposeInMainWorld('haroo', {
   openChat: function () { ipcRenderer.send('haroo:open-chat'); },
   // 알림 발생 → 액션 타임으로 깨우기 요청 (풀스크린이면 자동 보류)
   alert: function () { ipcRenderer.send('haroo:alert'); },
+  saveAiKey: function (provider, key) { return ipcRenderer.invoke('haroo:save-key', { provider: provider, key: key }); },
+  aiKeyStatus: function () { return ipcRenderer.invoke('haroo:get-key-status'); },
+  onOpenAiSettings: function (cb) { openAiCb = cb; },
   ready: function () { ipcRenderer.send('haroo:ready'); }
 });
