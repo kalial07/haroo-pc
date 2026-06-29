@@ -47,6 +47,11 @@ contextBridge.exposeInMainWorld('haroo', {
   toggleChat: function () { return ipcRenderer.invoke('haroo:toggle-chat'); },
   chatState: function () { return ipcRenderer.invoke('haroo:chat-state'); },
   quitApp: function () { ipcRenderer.send('haroo:quit'); },
+  getInventory: function () { return ipcRenderer.invoke('haroo:get-inventory'); },
+  addItem: function (slot, name, b64, equip) { return ipcRenderer.invoke('haroo:add-item', { slot: slot, name: name, b64: b64, equip: equip }); },
+  removeItem: function (slot, id) { return ipcRenderer.invoke('haroo:remove-item', { slot: slot, id: id }); },
+  equip: function (slot, id) { ipcRenderer.send('haroo:equip', { slot: slot, id: id }); },
+  genPart: function (slot, prompt, imageBase64) { return ipcRenderer.invoke('haroo:gen-part', { slot: slot, prompt: prompt, imageBase64: imageBase64 }); },
   onOpenAiSettings: function (cb) { openAiCb = cb; },
   ready: function () { ipcRenderer.send('haroo:ready'); }
 });

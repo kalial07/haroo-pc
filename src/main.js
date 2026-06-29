@@ -144,6 +144,56 @@ ipcMain.handle('haroo:gen-doll', async function (e, p) {
   try { return await genDoll(secrets.get('key.openai'), p.imageBase64, p.prompt); }
   catch (err) { return { ok: false, error: String((err && err.message) || err) }; }
 });
+// ── 파츠 생성 (텍스트=generations / 이미지=edits) ──
+var PARTWORD = {
+  eye: 'eye', mouth: 'mouth', hair: 'hairstyle (hair only, no face)',
+  face: 'round face base (no hair)', body: 'torso with clothing (no head, no limbs)',
+  arm: 'arm', leg: 'leg'
+};
+function genPart(key, slot, prompt, imageB64) {
+  var word = PARTWORD[slot] || 'part';
+  var base;
+  if (prompt && prompt.trim()) {
+    base = 'A cute chibi mascot ' + word + ' clearly themed around "' + prompt.trim() + '" (incorporate that motif into the ' + word + '), front view, centered, thick clean outline, flat pastel colors, simple flat style, transparent background, generous margin so it does not touch the edges, no text.';
+  } else {
+    base = 'A single cute chibi mascot ' + word + ', front view, centered, thick clean outline, flat pastel colors, simple flat style, transparent background, generous margin, no text.';
+  }
+  if (imageB64) {
+    var buf = Buffer.from(imageB64, 'base64');
+    var mp = multipartBody(
+      { model: MODEL_IMAGE, prompt: base, size: '1024x1024', background: 'transparent', output_format: 'png', quality: 'low', n: '1' },
+      { name: 'image', filename: 'ref.png', contentType: 'image/png', buffer: buf }
+    );
+    return new Promise(function (resolve) {
+      var req = https.request({ method: 'POST', host: 'api.openai.com', path: '/v1/images/edits',
+        headers: { 'authorization': 'Bearer ' + key, 'content-type': 'multipart/form-data; boundary=' + mp.boundary, 'content-length': mp.body.length } },
+        function (res) { var b = ''; res.on('data', function (d) { b += d; }); res.on('end', function () { var j = null; try { j = JSON.parse(b); } catch (e) {}
+          if (res.statusCode === 200 && j && j.data && j.data[0] && j.data[0].b64_json) resolve({ ok: true, b64: j.data[0].b64_json });
+          else resolve({ ok: false, error: (j && j.error && j.error.message) || ('HTTP ' + res.statusCode) }); }); });
+      req.on('error', function (e) { resolve({ ok: false, error: String((e && e.message) || e) }); });
+      req.write(mp.body); req.end();
+    });
+  } else {
+    var body = JSON.stringify({ model: MODEL_IMAGE, prompt: base, size: '1024x1024', background: 'transparent', output_format: 'png', quality: 'low', n: 1 });
+    return new Promise(function (resolve) {
+      var req = https.request({ method: 'POST', host: 'api.openai.com', path: '/v1/images/generations',
+        headers: { 'authorization': 'Bearer ' + key, 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) } },
+        function (res) { var b = ''; res.on('data', function (d) { b += d; }); res.on('end', function () { var j = null; try { j = JSON.parse(b); } catch (e) {}
+          if (res.statusCode === 200 && j && j.data && j.data[0] && j.data[0].b64_json) resolve({ ok: true, b64: j.data[0].b64_json });
+          else resolve({ ok: false, error: (j && j.error && j.error.message) || ('HTTP ' + res.statusCode) }); }); });
+      req.on('error', function (e) { resolve({ ok: false, error: String((e && e.message) || e) }); });
+      req.write(body); req.end();
+    });
+  }
+}
+ipcMain.handle('haroo:gen-part', async function (e, p) {
+  var st = keyStatus();
+  if (!st.openai) return { ok: false, error: 'ChatGPT(OpenAI) 키를 먼저 연결해줘' };
+  if (!p || !p.slot) return { ok: false, error: '슬롯 정보가 없어요' };
+  if (!p.prompt && !p.imageBase64) return { ok: false, error: '텍스트나 이미지를 입력해줘' };
+  try { return await genPart(secrets.get('key.openai'), p.slot, p.prompt, p.imageBase64); }
+  catch (err) { return { ok: false, error: String((err && err.message) || err) }; }
+});
 function dollsList() { return store.get('dolls') || []; }
 function activeDollId() { return store.get('dollActive') || 'default'; }
 function activeDollImg() {
@@ -163,6 +213,28 @@ ipcMain.handle('haroo:add-doll', function (e, p) {
 ipcMain.handle('haroo:set-active-doll', function (e, p) {
   store.set('dollActive', (p && p.id != null) ? p.id : 'default');
   return { img: activeDollImg(), active: activeDollId() };
+});
+// ── 파츠 인벤토리 (슬롯별 아이템 목록 + 장착 상태) ──
+function partItems() { return store.get('partItems') || {}; }
+function partEquip() { return store.get('partEquipped') || {}; }
+ipcMain.handle('haroo:get-inventory', function () { return { items: partItems(), equipped: partEquip() }; });
+ipcMain.handle('haroo:add-item', function (e, p) {
+  if (!p || !p.slot || !p.b64) return { items: partItems(), equipped: partEquip() };
+  var it = partItems(); var arr = it[p.slot] || []; var id = 'i' + Date.now();
+  arr.push({ id: id, name: (p.name || '아이템'), b64: p.b64 }); it[p.slot] = arr; store.set('partItems', it);
+  if (p.equip) { var eq = partEquip(); eq[p.slot] = id; store.set('partEquipped', eq); }
+  return { items: it, equipped: partEquip(), newId: id };
+});
+ipcMain.handle('haroo:remove-item', function (e, p) {
+  if (!p || !p.slot || !p.id) return { items: partItems(), equipped: partEquip() };
+  var it = partItems(); it[p.slot] = (it[p.slot] || []).filter(function (x) { return x.id !== p.id; }); store.set('partItems', it);
+  var eq = partEquip(); if (eq[p.slot] === p.id) { delete eq[p.slot]; store.set('partEquipped', eq); }
+  return { items: it, equipped: partEquip() };
+});
+ipcMain.on('haroo:equip', function (e, p) {
+  if (!p || !p.slot) return; var eq = partEquip();
+  if (p.id && p.id !== 'builtin') eq[p.slot] = p.id; else delete eq[p.slot];
+  store.set('partEquipped', eq);
 });
 
 ipcMain.handle('haroo:chat', async function (e, payload) {
@@ -752,7 +824,7 @@ const OVERLAY_JS = `
       '처리할 항목을 확인해 주세요.':'Please check the items.','우선순위를 점검하시겠어요?':'Shall we review priorities?',
       '보고 드릴 사항이 있습니다.':'I have something to report.',
       '이 기능은 다음 버전에서 실제로 동작해요':'This feature works in the next version','팀 단위 프로젝트 관리 · V0에선 샘플만 보여드려요':'Team project management · sample only','매일의 컨디션·집중도를 기록 · V0 샘플':'Track daily mood & focus · sample','회의 내용에서 할 일을 자동 추출 · V0 샘플':'Auto-extract tasks from meetings · sample','데일리 체크인':'Daily check-in','회의 노트':'Meeting notes','프로젝트':'Projects','오늘':'Today','어제':'Yesterday','그제':'2 days ago','좋음':'Good','보통':'Okay','최고':'Great','집중 4시간':'4h focus','집중 2.5시간':'2.5h focus','집중 5시간':'5h focus','기획':'Planning','액션 3건':'3 actions','액션 5건':'5 actions','액션 2건':'2 actions','3/8 태스크':'3/8 tasks','0/12 태스크':'0/12 tasks','5/9 태스크':'5/9 tasks','STO 리뉴얼':'STO Renewal','신규 IP 런칭':'New IP Launch','해외 영업 Q3':'Overseas Sales Q3','주간 영업 회의':'Weekly Sales Meeting','IP 기획 리뷰':'IP Planning Review','바이어 미팅':'Buyer Meeting','😊 좋음':'😊 Good','😐 보통':'😐 Okay','🔥 최고':'🔥 Great','따뜻하게':'Warmly','쿨하게':'Coolly','활기차게':'Energetically','잔잔하게':'Calmly','새침하게':'Coyly','비서처럼':'Like a secretary','캡처하거나 직접 추가한 할 일이 모여요.':'Captured and added tasks gather here.','태스크 추가':'Add task','전체':'All',
-      '제어':'Controls'
+      '제어':'Controls','눈':'Eyes','입':'Mouth','머리카락':'Hair','얼굴':'Face','몸통':'Body','팔':'Arms','다리':'Legs','🧩 파츠 인벤토리':'🧩 Parts inventory','· 슬롯에 이미지를 올리면 그 자리에만 적용':'· Upload an image to fill that slot only','이미지 올리기':'Upload image','기본값':'Default'
     };
     var INV = null;
     function inv(){ if(INV) return INV; INV={}; for(var k in DICT) INV[DICT[k]]=k; return INV; }
@@ -823,6 +895,138 @@ const OVERLAY_JS = `
     function go(l){ window.__hLang=l||'en'; injectCtl(); window.__hApply(window.__hLang); setTimeout(function(){ window.__hApply(window.__hLang); }, 250); }
     function init(){ injectCtl(); if(window.haroo&&window.haroo.getLang){ window.haroo.getLang().then(go); } else { go('en'); } }
     init();
+  })();
+
+  // ── 13) 파츠 인벤토리 (슬롯별 아이템 보관 · 장착/생성/삭제) ──
+  (function () {
+    var SLOTS = [
+      { id:'eye',   ko:'눈',     sel:'.part.eye',   pos:'left:0;top:64px' },
+      { id:'mouth', ko:'입',     sel:'.part.mouth-idle, .part.mouth-talk', pos:'right:0;top:64px' },
+      { id:'hair',  ko:'머리카락', sel:'.part.hair',  pos:'left:62px;top:-6px' },
+      { id:'face',  ko:'얼굴',    sel:'.part.face',  pos:'right:62px;top:-6px' },
+      { id:'body',  ko:'몸통',    sel:'.part.body',  pos:'right:0;top:140px' },
+      { id:'arm',   ko:'팔',     sel:'.part.arm',   pos:'left:0;top:140px' },
+      { id:'leg',   ko:'다리',    sel:'.part.leg',   pos:'left:99px;top:200px' }
+    ];
+    var origMap = new WeakMap();
+    var INV = { items:{}, equipped:{} };
+    function bySlot(id){ return SLOTS.filter(function(x){return x.id===id;})[0]; }
+    function scoped(sel){ return sel.split(',').map(function(x){ return '#charLayer ' + x.trim(); }).join(', '); }
+    function slotEls(s){ return Array.prototype.slice.call(document.querySelectorAll(scoped(s.sel))); }
+    function refreshPreview(){ try{ if(typeof mountAvatar==='function' && document.getElementById('pvChar')) mountAvatar('#pvChar', 130); }catch(e){} }
+    function captureOrig(){ SLOTS.forEach(function(s){ slotEls(s).forEach(function(el){ if(!origMap.has(el)) origMap.set(el, el.getAttribute('src')); }); }); }
+    function builtinSrc(id){ var els=slotEls(bySlot(id)); for(var i=0;i<els.length;i++){ if(origMap.has(els[i])) return origMap.get(els[i]); } return ''; }
+    var MIRROR = { eye:true, arm:true, leg:true }; // 좌우 쌍 → 2번째 요소는 좌우반전
+    function flipB64(b64, cb){ var img=new Image();
+      img.onload=function(){ var c=document.createElement('canvas'); c.width=img.width; c.height=img.height; var x=c.getContext('2d'); x.translate(img.width,0); x.scale(-1,1); x.drawImage(img,0,0); cb(c.toDataURL('image/png')); };
+      img.onerror=function(){ cb('data:image/png;base64,'+b64); }; img.src='data:image/png;base64,'+b64; }
+    function applyItemSrc(id, b64, done){
+      var els=slotEls(bySlot(id)); var src='data:image/png;base64,'+b64;
+      if(MIRROR[id] && els.length>1){
+        flipB64(b64, function(flipped){ els.forEach(function(el,i){ el.style.objectFit='contain'; el.setAttribute('src', i===0?src:flipped); }); if(done)done(); });
+      } else {
+        els.forEach(function(el){ el.style.objectFit='contain'; el.setAttribute('src', src); }); if(done)done();
+      }
+    }
+    function equipBuiltin(id){ slotEls(bySlot(id)).forEach(function(el){ if(origMap.has(el)){ el.setAttribute('src', origMap.get(el)); el.style.objectFit=''; } }); }
+    function itemsOf(id){ return INV.items[id] || []; }
+    function applyEquipped(id){
+      var eqId = INV.equipped[id];
+      var item = itemsOf(id).filter(function(x){return x.id===eqId;})[0];
+      if(item) applyItemSrc(id, item.b64, function(){ refreshPreview(); updateRing(); });
+      else { equipBuiltin(id); refreshPreview(); updateRing(); }
+    }
+
+    function processPart(b64){ return new Promise(function(res){ var img=new Image();
+      img.onload=function(){ var w0=img.width,h0=img.height; var c0=document.createElement('canvas'); c0.width=w0; c0.height=h0; var x0=c0.getContext('2d'); x0.drawImage(img,0,0);
+        var px; try{ px=x0.getImageData(0,0,w0,h0).data; }catch(e){ res(b64); return; }
+        var minX=w0,minY=h0,maxX=0,maxY=0,f=false;
+        for(var y=0;y<h0;y++)for(var x=0;x<w0;x++){ if(px[(y*w0+x)*4+3]>20){ f=true; if(x<minX)minX=x; if(x>maxX)maxX=x; if(y<minY)minY=y; if(y>maxY)maxY=y; } }
+        if(!f){ res(b64); return; } var cw=maxX-minX+1,ch=maxY-minY+1; var sc=Math.min(1,256/Math.max(cw,ch));
+        var fw=Math.max(1,Math.round(cw*sc)),fh=Math.max(1,Math.round(ch*sc)); var cc=document.createElement('canvas'); cc.width=fw; cc.height=fh;
+        cc.getContext('2d').drawImage(c0,minX,minY,cw,ch,0,0,fw,fh); res(cc.toDataURL('image/png').split(',')[1]); };
+      img.onerror=function(){ res(b64); }; img.src='data:image/png;base64,'+b64; }); }
+    function fileToB64(file, cb){ var r=new FileReader(); r.onload=function(){ var img=new Image();
+      img.onload=function(){ var max=256, sc=Math.min(1,max/Math.max(img.width,img.height)); var w=Math.max(1,Math.round(img.width*sc)),h=Math.max(1,Math.round(img.height*sc));
+        var c=document.createElement('canvas'); c.width=w; c.height=h; c.getContext('2d').drawImage(img,0,0,w,h); cb(c.toDataURL('image/png').split(',')[1]); };
+      img.onerror=function(){ cb(null); }; img.src=r.result; }; r.readAsDataURL(file); }
+
+    // 하루 둘레 슬롯 링
+    function buildRing(){ var pv=document.querySelector('.set-preview .pv-char'); if(!pv) return; if(document.getElementById('equipRing')) return;
+      var ring=document.createElement('div'); ring.id='equipRing'; ring.style.cssText='position:relative;width:240px;height:250px;margin:0 auto;flex:0 0 auto';
+      pv.parentNode.insertBefore(ring, pv); pv.style.position='absolute'; pv.style.left='55px'; pv.style.top='60px'; ring.appendChild(pv);
+      SLOTS.forEach(function(s){ var b=document.createElement('div'); b.className='equip-slot'; b.dataset.slot=s.id;
+        b.style.cssText='position:absolute;'+s.pos+';width:44px;height:44px;border-radius:11px;border:2px solid var(--line);background:var(--surface);box-shadow:0 1px 4px rgba(0,0,0,.08);display:flex;align-items:center;justify-content:center;cursor:pointer;transition:.15s';
+        b.innerHTML='<img style="max-width:32px;max-height:32px;object-fit:contain"><span style="position:absolute;bottom:-15px;font-size:9px;color:var(--ink-soft);white-space:nowrap">'+s.ko+'</span>';
+        b.onmouseenter=function(){ b.style.borderColor='var(--brand,#f06)'; b.style.transform='scale(1.08)'; };
+        b.onmouseleave=function(){ b.style.borderColor='var(--line)'; b.style.transform='scale(1)'; };
+        b.onclick=function(){ openEditor(s.id); }; ring.appendChild(b); }); updateRing(); }
+    function updateRing(){ SLOTS.forEach(function(s){ var el=document.querySelector(scoped(s.sel)); var src=el?el.getAttribute('src'):'';
+      var b=document.querySelector('.equip-slot[data-slot="'+s.id+'"] img'); if(b) b.src=src; }); }
+
+    // ── 슬롯 편집 팝업 ──
+    function closeEditor(){ var e=document.getElementById('slotEditor'); if(e) e.remove(); }
+    function openEditor(id){ closeEditor(); var s=bySlot(id); if(!s) return; var refB64=null;
+      var ov=document.createElement('div'); ov.id='slotEditor';
+      ov.style.cssText='position:fixed;inset:0;z-index:99999;background:rgba(20,22,45,.4);display:flex;align-items:center;justify-content:center';
+      ov.innerHTML='<div id="seBox" style="width:360px;max-width:92%;max-height:86vh;overflow:auto;background:var(--surface);border-radius:16px;padding:18px;box-shadow:0 12px 40px rgba(0,0,0,.25)"></div>';
+      document.body.appendChild(ov);
+      ov.addEventListener('click', function(e){ if(e.target===ov) closeEditor(); });
+      function setRefLabel(){ var d=document.getElementById('seDrop'); if(d) d.textContent = refB64 ? '참고 이미지 첨부됨 ✓ (다시=교체)' : '참고 이미지(선택) 드래그/클릭'; }
+      function render(){
+        var box=document.getElementById('seBox');
+        var eqId = INV.equipped[id] || 'builtin';
+        var cards = '<div class="seCard'+(eqId==='builtin'?' on':'')+'" data-eq="builtin" style="position:relative;border:2px solid '+(eqId==='builtin'?'var(--brand,#f06)':'var(--line)')+';border-radius:10px;padding:6px;cursor:pointer;text-align:center"><div style="height:42px;display:flex;align-items:center;justify-content:center;background:var(--surface-2);border-radius:7px"><img src="'+builtinSrc(id)+'" style="max-width:34px;max-height:34px;object-fit:contain"></div><div style="font-size:10px;margin-top:3px">기본</div></div>';
+        itemsOf(id).forEach(function(it){ var on=eqId===it.id;
+          cards += '<div class="seCard'+(on?' on':'')+'" data-eq="'+it.id+'" style="position:relative;border:2px solid '+(on?'var(--brand,#f06)':'var(--line)')+';border-radius:10px;padding:6px;cursor:pointer;text-align:center"><div style="height:42px;display:flex;align-items:center;justify-content:center;background:var(--surface-2);border-radius:7px"><img src="data:image/png;base64,'+it.b64+'" style="max-width:34px;max-height:34px;object-fit:contain"></div><div style="font-size:10px;margin-top:3px">'+(it.name||'아이템')+'</div><span class="seDel" data-del="'+it.id+'" style="position:absolute;top:-7px;right:-7px;width:18px;height:18px;border-radius:50%;background:#e44;color:#fff;font-size:12px;line-height:18px;text-align:center;cursor:pointer">×</span></div>'; });
+        box.innerHTML=''
+          +'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px"><b style="font-size:15px">'+s.ko+' 슬롯</b><span id="seX" style="cursor:pointer;color:var(--ink-faint);font-size:18px">✕</span></div>'
+          +'<div style="font-size:11px;color:var(--ink-faint);margin-bottom:6px">보유 아이템 · 눌러서 장착</div>'
+          +'<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px">'+cards+'</div>'
+          +'<div style="height:1px;background:var(--line);margin:4px 0 12px"></div>'
+          +'<div style="font-size:11px;color:var(--ink-faint);margin-bottom:6px">새로 만들기 (목록에 추가)</div>'
+          +'<textarea id="seP" placeholder="예: 둥근 파란 눈, 반짝이는" style="width:100%;box-sizing:border-box;height:44px;border:1px solid var(--line);border-radius:10px;padding:8px;font-size:13px;resize:none"></textarea>'
+          +'<div id="seDrop" style="margin-top:8px;border:1.5px dashed var(--line);border-radius:10px;padding:9px;text-align:center;font-size:12px;color:var(--ink-faint);cursor:pointer">참고 이미지(선택) 드래그/클릭</div>'
+          +'<div id="seStatus" style="font-size:12px;color:var(--ink-soft);min-height:16px;margin-top:8px"></div>'
+          +'<div style="display:flex;gap:8px;margin-top:8px"><button id="seGen" class="btn btn-primary" style="flex:1">✨ AI로 생성</button><button id="seUp" class="btn btn-ghost" style="flex:1">📁 업로드</button></div>';
+        setRefLabel();
+        document.getElementById('seX').onclick=closeEditor;
+        Array.prototype.forEach.call(box.querySelectorAll('.seCard'), function(c){ c.onclick=function(e){
+          if(e.target.classList.contains('seDel')){ e.stopPropagation(); var did=e.target.getAttribute('data-del');
+            if(window.haroo&&window.haroo.removeItem) window.haroo.removeItem(id, did).then(function(d){ INV={items:(d&&d.items)||{},equipped:(d&&d.equipped)||{}}; applyEquipped(id); render(); }); return; }
+          var eq=c.getAttribute('data-eq'); INV.equipped[id]= (eq==='builtin'?undefined:eq); if(window.haroo&&window.haroo.equip) window.haroo.equip(id, eq); applyEquipped(id); render(); }; });
+        var drop=document.getElementById('seDrop');
+        drop.onclick=function(){ var inp=document.createElement('input'); inp.type='file'; inp.accept='image/*'; inp.onchange=function(){ var f=inp.files[0]; if(f) fileToB64(f, function(b){ refB64=b; setRefLabel(); }); }; inp.click(); };
+        drop.addEventListener('dragover', function(e){ e.preventDefault(); drop.style.borderColor='var(--brand,#f06)'; });
+        drop.addEventListener('dragleave', function(){ drop.style.borderColor='var(--line)'; });
+        drop.addEventListener('drop', function(e){ e.preventDefault(); drop.style.borderColor='var(--line)'; var f=e.dataTransfer.files[0]; if(f) fileToB64(f, function(b){ refB64=b; setRefLabel(); }); });
+        var stt=document.getElementById('seStatus');
+        function addAndEquip(b64){ var nm=s.ko+' '+(itemsOf(id).length+1);
+          if(!window.haroo||!window.haroo.addItem) return;
+          window.haroo.addItem(id, nm, b64, true).then(function(d){ INV={items:(d&&d.items)||{},equipped:(d&&d.equipped)||{}}; applyEquipped(id); refB64=null; render(); }); }
+        document.getElementById('seGen').onclick=function(){
+          var prompt=(document.getElementById('seP').value||'').trim();
+          if(!prompt && !refB64){ stt.textContent='텍스트를 적거나 참고 이미지를 올려줘'; return; }
+          stt.innerHTML='<span class="haru-spin"></span> 생성 중… (최대 1분)';
+          if(!window.haroo||!window.haroo.genPart){ stt.textContent='생성 기능을 쓸 수 없어요'; return; }
+          window.haroo.genPart(id, prompt, refB64).then(function(r){
+            if(!r||!r.ok){ stt.textContent='실패: '+((r&&r.error)||'오류'); return; }
+            stt.innerHTML='<span class="haru-spin"></span> 다듬는 중…';
+            processPart(r.b64).then(function(clean){ addAndEquip(clean); stt.textContent='완성! 목록에 추가하고 장착했어요 ✨'; });
+          }).catch(function(e){ stt.textContent='오류: '+e; });
+        };
+        document.getElementById('seUp').onclick=function(){ var inp=document.createElement('input'); inp.type='file'; inp.accept='image/*';
+          inp.onchange=function(){ var f=inp.files[0]; if(f) fileToB64(f, function(b){ addAndEquip(b); }); }; inp.click(); };
+      }
+      render();
+    }
+
+    function initParts(){ captureOrig(); buildRing();
+      if(window.haroo&&window.haroo.getInventory){ window.haroo.getInventory().then(function(d){ INV={items:(d&&d.items)||{},equipped:(d&&d.equipped)||{}};
+        SLOTS.forEach(function(s){ applyEquipped(s.id); }); buildRing(); updateRing(); }); } }
+    // 설정창 열릴 때 링 보장 (패시브 — 클릭 처리 안 건드림)
+    document.addEventListener('click', function(){ setTimeout(function(){ buildRing(); updateRing(); }, 80); }, false);
+    initParts();
   })();
 
   if (window.haroo && window.haroo.ready) window.haroo.ready();
