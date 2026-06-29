@@ -48,7 +48,9 @@ function buildSystem() {
   const name = p.name || '하루';
   const role = p.role || '나의 업무 비서';
   const tone = TONE[p.personality] || (p.personality ? (p.personality + ' 말투로') : '친근한 말투로');
-  return '당신은 "' + name + '"라는 이름의 데스크톱 업무 비서 캐릭터입니다. 맡은 역할은 "' + role + '"입니다. ' + tone + ' 한국어로 간결하게 대답합니다. 사용자의 업무·일정·아이디어 정리를 돕고, 모호하면 먼저 짧게 확인 질문을 합니다. 너무 길게 말하지 않습니다.';
+  var lang = store.get('lang') || 'en';
+  var langLine = (lang === 'en') ? ' Always reply in English.' : ' 한국어로 대답하세요.';
+  return '당신은 "' + name + '"라는 이름의 데스크톱 업무 비서 캐릭터입니다. 맡은 역할은 "' + role + '"입니다. ' + tone + ' 간결하게 대답합니다. 사용자의 업무·일정·아이디어 정리를 돕고, 모호하면 먼저 짧게 확인 질문을 합니다. 너무 길게 말하지 않습니다.' + langLine;
 }
 
 function httpsJson(host, pathName, headers, bodyObj) {
@@ -698,6 +700,99 @@ const OVERLAY_JS = `
     check();
   })();
 
+  // ── 다국어 (영어 기본 / 한국어) — 텍스트 교체만, 클릭/창 코드 안 건드림 ──
+  (function () {
+    var DICT = {
+      'HAROO 대시보드':'HAROO Dashboard','워크스페이스':'Workspace','오늘 한눈에':'Overview',
+      '태스크':'Tasks','곧 추가될 기능':'Coming soon','프로젝트':'Projects','데일리 체크인':'Daily check-in',
+      '회의 노트':'Meeting notes','샘플':'Sample','V0에선 샘플 화면으로 시연돼요':'Shown as a sample screen',
+      '캐릭터 설정':'Character Settings','캐릭터':'Character','이름':'Name','역할':'Role','말투':'Tone',
+      '나의 업무 비서':'My work assistant','선택한 캐릭터 · 이름':'Selected character · name',
+      '변경사항 저장':'Save changes','💬 대화 AI 연결':'💬 Chat AI Connection',
+      '· 연결하면 목록에 활성화돼요':'· Connect to activate','캐릭터 리스트':'Character list',
+      '· 6종 중 1개':'· 1 of 6','· 만들 때마다 채워져요':'· Fills as you create','· 선택':'· select',
+      '또는 클릭해서 선택':'or click to select','참고 이미지':'Reference image','외형 프롬프트':'Appearance prompt',
+      '이미지 끌어다 놓기':'Drag image here','이미지를 끌어다 놓거나 클릭':'Drag an image or click',
+      '이미지 분석 중…':'Analyzing image…','인식하는 중…':'Recognizing…','동일한 파츠 세트':'Same part set',
+      '조립 완료! 리스트에 추가할까요?':'Done! Add to the list?',
+      '📸 화면 캡처':'📸 Screen Capture','지금 화면 캡처하기':'Capture screen now',
+      '카톡·메일 스크린샷 파일':'KakaoTalk/email screenshot','📋 텍스트':'📋 Text','🖼️ 이미지':'🖼️ Image',
+      '✨ 할 일 추출하기':'✨ Extract tasks','태스크에 추가하기':'Add to tasks',
+      '맞는지 확인하고 고친 뒤 추가하세요 · 사람이 검토하는 단계예요':'Review and edit before adding',
+      '✅ 이렇게 정리했어요':'✅ Here is the summary','한국어·영어 섞여 있어도 인식해요':'Works with mixed Korean/English',
+      '캐릭터 숨기기':'Hide character','종료':'Quit','안녕하세요! 오늘도 잘 부탁해요 🌷':'Hi! Let us have a great day 🌷',
+      '다정':'Sweet','시크':'Chic','발랄':'Cheerful','차분':'Calm','츤데레':'Tsundere','프로':'Pro',
+      '인형 생성':'Create Doll','캐릭터 생성':'Create Character','추후 제공':'Coming soon',
+      '🧸 인형 리스트':'🧸 Doll list','· 누르면 하루가 바꿔 들어요':'· tap to swap','하누':'Hanu','인형':'Doll',
+      '수정':'Edit','✨ 인형 만들기':'✨ Make Doll',
+      '남은 할 일':'Remaining','긴급 항목':'Urgent','오늘 완료':'Done today','태스크 보기':'View tasks',
+      '빠른 작업':'Quick actions','할 일':'To do','진행 중':'In progress','검토':'Review','완료':'Done',
+      '무리하지 말고 한 걸음씩 가요 :)':'One step at a time, no rush :)',
+      '오늘도 옆에서 응원할게요!':'Cheering you on today!','물 한 잔 마시고 올까요?':'Maybe grab some water?',
+      '...왔구나. 시작하자.':'...You are here. Let us start.','해야 할 거, 알지?':'You know what to do, right?',
+      '...집중.':'...Focus.','시간 가고 있어.':'Time is ticking.','헤헤 저 여기 있어요!':'Hehe I am right here!',
+      '오늘 뭐부터 할까요?!':'What should we start with?!','파이팅 넘치는 하루!! 💪':'A day full of energy!! 💪',
+      '잠시 쉬어가도 괜찮아요.':'It is okay to take a break.','하나씩 차근히 해봐요.':'Let us go one by one.',
+      '지금 이 순간에 집중해요.':'Focus on this moment.','너 걱정해서 알려주는 거 아니야!':'Not because I am worried, okay!',
+      '빨리 안 해?':'Get going already.','...잘하고 있네. (작게)':'...You are doing well. (quietly)',
+      '처리할 항목을 확인해 주세요.':'Please check the items.','우선순위를 점검하시겠어요?':'Shall we review priorities?',
+      '보고 드릴 사항이 있습니다.':'I have something to report.','제어':'Controls'
+    };
+    var INV = null;
+    function inv(){ if(INV) return INV; INV={}; for(var k in DICT) INV[DICT[k]]=k; return INV; }
+    function cur(){ return window.__hLang || 'en'; }
+    function tr(s, lang){
+      var key=s.replace(/^\s+|\s+$/g,''); if(!key) return s;
+      var lead=s.match(/^\s*/)[0], trail=s.match(/\s*$/)[0];
+      var map=(lang==='en')?DICT:inv();
+      if(map[key]!=null) return lead+map[key]+trail;
+      var m=key.match(/^([^\uAC00-\uD7A3A-Za-z0-9]+\s*)(.+)$/);
+      if(m && map[m[2]]!=null) return lead+m[1]+map[m[2]]+trail;
+      return s;
+    }
+    function walk(lang){
+      var w=document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null), ns=[], n;
+      while(n=w.nextNode()) ns.push(n);
+      ns.forEach(function(t){ var v=t.nodeValue; if(!v||!v.replace(/\s/g,'')) return; var nx=tr(v,lang); if(nx!==v) t.nodeValue=nx; });
+      Array.prototype.forEach.call(document.querySelectorAll('[placeholder]'), function(el){
+        var key=(el.getAttribute('placeholder')||'').replace(/^\s+|\s+$/g,'');
+        var map=(lang==='en')?DICT:inv(); if(map[key]!=null) el.setAttribute('placeholder', map[key]);
+      });
+    }
+    function ctlLabels(lang){
+      var L=lang==='en';
+      var g=document.getElementById('hCtlG'); if(g) g.textContent=L?'Controls':'제어';
+      var a=document.querySelector('#hLangBtn .nl'); if(a) a.textContent=L?'English':'한국어';
+      var q=document.querySelector('#hQuitBtn .nl'); if(q) q.textContent=L?'Quit':'종료';
+      if(window.haroo && window.haroo.chatState) window.haroo.chatState().then(function(open){
+        var c=document.querySelector('#hChatBtn .nl'); if(c) c.textContent=open?(L?'Close Chat':'채팅 닫기'):(L?'Open Chat':'채팅 열기');
+      });
+    }
+    window.__hApply=function(lang){ window.__hLang=lang; try{document.documentElement.setAttribute('lang',lang);}catch(e){} walk(lang); ctlLabels(lang); };
+
+    function injectCtl(){
+      var nav=document.getElementById('dashNav'); if(!nav || document.getElementById('hCtlG')) return;
+      var box=document.createElement('div');
+      box.innerHTML='<div class="nav-group" id="hCtlG" style="margin-top:14px">Controls</div>'+
+        '<div class="nav-item" id="hChatBtn" style="cursor:pointer"><span class="ni">💬</span> <span class="nl">Open Chat</span></div>'+
+        '<div class="nav-item" id="hLangBtn" style="cursor:pointer"><span class="ni">🌐</span> <span class="nl">English</span></div>'+
+        '<div class="nav-item" id="hQuitBtn" style="cursor:pointer"><span class="ni">⏻</span> <span class="nl">Quit</span></div>';
+      while(box.firstChild) nav.appendChild(box.firstChild);
+      document.getElementById('hChatBtn').addEventListener('click', function(){ if(window.haroo&&window.haroo.toggleChat) window.haroo.toggleChat().then(function(){ ctlLabels(cur()); }); });
+      document.getElementById('hLangBtn').addEventListener('click', function(){ var nx=cur()==='en'?'ko':'en'; window.__hApply(nx); if(window.haroo&&window.haroo.setLang) window.haroo.setLang(nx); });
+      document.getElementById('hQuitBtn').addEventListener('click', function(){ var L=cur()==='en'; if(window.confirm(L?'Quit HAROO?':'하루를 종료할까요?')){ if(window.haroo&&window.haroo.quitApp) window.haroo.quitApp(); } });
+    }
+
+    // 페이지 전환 클릭 시 재번역 (가벼운 패시브 리스너 — 클릭 처리엔 영향 없음)
+    document.addEventListener('click', function(e){
+      if(e.target.closest && e.target.closest('[data-page]')) setTimeout(function(){ window.__hApply(cur()); }, 70);
+    }, false);
+
+    // 초기 적용 (기본 영어)
+    function init(){ injectCtl(); if(window.haroo&&window.haroo.getLang){ window.haroo.getLang().then(function(l){ injectCtl(); window.__hApply(l||'en'); }); } else { window.__hApply('en'); } }
+    init();
+  })();
+
   if (window.haroo && window.haroo.ready) window.haroo.ready();
 })();
 `;
@@ -824,6 +919,14 @@ function openChat() {
   });
 }
 ipcMain.on('haroo:open-chat', function () { openChat(); });
+ipcMain.handle('haroo:get-lang', function () { return store.get('lang') || 'en'; });
+ipcMain.on('haroo:set-lang', function (e, l) { if (l === 'en' || l === 'ko') store.set('lang', l); });
+ipcMain.handle('haroo:toggle-chat', function () {
+  if (chatWin && !chatWin.isDestroyed()) { chatWin.close(); return false; }
+  openChat(); return true;
+});
+ipcMain.handle('haroo:chat-state', function () { return !!(chatWin && !chatWin.isDestroyed()); });
+ipcMain.on('haroo:quit', function () { app.quit(); });
 ipcMain.on('haroo:save-pos', function (e, p) {
   store.set('charXFrac', (p && typeof p.xFrac === 'number') ? p.xFrac : 0.5);
 });

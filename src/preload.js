@@ -42,6 +42,11 @@ contextBridge.exposeInMainWorld('haroo', {
   setActiveDoll: function (id) { return ipcRenderer.invoke('haroo:set-active-doll', { id: id }); },
   uiOpen: function () { ipcRenderer.send('haroo:ui-open'); },
   uiClosed: function () { ipcRenderer.send('haroo:ui-closed'); },
+  getLang: function () { return ipcRenderer.invoke('haroo:get-lang'); },
+  setLang: function (l) { ipcRenderer.send('haroo:set-lang', l); },
+  toggleChat: function () { return ipcRenderer.invoke('haroo:toggle-chat'); },
+  chatState: function () { return ipcRenderer.invoke('haroo:chat-state'); },
+  quitApp: function () { ipcRenderer.send('haroo:quit'); },
   onOpenAiSettings: function (cb) { openAiCb = cb; },
   ready: function () { ipcRenderer.send('haroo:ready'); }
 });
