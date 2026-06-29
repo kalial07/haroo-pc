@@ -736,7 +736,9 @@ const OVERLAY_JS = `
       '지금 이 순간에 집중해요.':'Focus on this moment.','너 걱정해서 알려주는 거 아니야!':'Not because I am worried, okay!',
       '빨리 안 해?':'Get going already.','...잘하고 있네. (작게)':'...You are doing well. (quietly)',
       '처리할 항목을 확인해 주세요.':'Please check the items.','우선순위를 점검하시겠어요?':'Shall we review priorities?',
-      '보고 드릴 사항이 있습니다.':'I have something to report.','제어':'Controls'
+      '보고 드릴 사항이 있습니다.':'I have something to report.',
+      '이 기능은 다음 버전에서 실제로 동작해요':'This feature works in the next version','팀 단위 프로젝트 관리 · V0에선 샘플만 보여드려요':'Team project management · sample only','매일의 컨디션·집중도를 기록 · V0 샘플':'Track daily mood & focus · sample','회의 내용에서 할 일을 자동 추출 · V0 샘플':'Auto-extract tasks from meetings · sample','데일리 체크인':'Daily check-in','회의 노트':'Meeting notes','프로젝트':'Projects','오늘':'Today','어제':'Yesterday','그제':'2 days ago','좋음':'Good','보통':'Okay','최고':'Great','집중 4시간':'4h focus','집중 2.5시간':'2.5h focus','집중 5시간':'5h focus','기획':'Planning','액션 3건':'3 actions','액션 5건':'5 actions','액션 2건':'2 actions','3/8 태스크':'3/8 tasks','0/12 태스크':'0/12 tasks','5/9 태스크':'5/9 tasks','STO 리뉴얼':'STO Renewal','신규 IP 런칭':'New IP Launch','해외 영업 Q3':'Overseas Sales Q3','주간 영업 회의':'Weekly Sales Meeting','IP 기획 리뷰':'IP Planning Review','바이어 미팅':'Buyer Meeting','😊 좋음':'😊 Good','😐 보통':'😐 Okay','🔥 최고':'🔥 Great','따뜻하게':'Warmly','쿨하게':'Coolly','활기차게':'Energetically','잔잔하게':'Calmly','새침하게':'Coyly','비서처럼':'Like a secretary','캡처하거나 직접 추가한 할 일이 모여요.':'Captured and added tasks gather here.','태스크 추가':'Add task','전체':'All',
+      '제어':'Controls'
     };
     var INV = null;
     function inv(){ if(INV) return INV; INV={}; for(var k in DICT) INV[DICT[k]]=k; return INV; }
@@ -768,7 +770,19 @@ const OVERLAY_JS = `
         var c=document.querySelector('#hChatBtn .nl'); if(c) c.textContent=open?(L?'Close Chat':'채팅 닫기'):(L?'Open Chat':'채팅 열기');
       });
     }
-    window.__hApply=function(lang){ window.__hLang=lang; try{document.documentElement.setAttribute('lang',lang);}catch(e){} walk(lang); ctlLabels(lang); };
+    var NAV_EN={'overview':'Overview','tasks':'Tasks','capture-page':'Quick Capture','projects':'Projects','checkin-page':'Daily check-in','meeting':'Meeting notes','character':'Character Settings'};
+    var NAV_KO={'overview':'오늘 한눈에','tasks':'태스크','capture-page':'Quick Capture','projects':'프로젝트','checkin-page':'데일리 체크인','meeting':'회의 노트','character':'캐릭터 설정'};
+    function fixNav(lang){
+      var map=(lang==='en')?NAV_EN:NAV_KO;
+      Array.prototype.forEach.call(document.querySelectorAll('.nav-item[data-page]'), function(it){
+        var dp=it.getAttribute('data-page'), label=map[dp]; if(label==null) return;
+        for(var i=0;i<it.childNodes.length;i++){
+          var nd=it.childNodes[i];
+          if(nd.nodeType===3 && nd.nodeValue.replace(/\s/g,'')){ nd.nodeValue=' '+label+' '; break; }
+        }
+      });
+    }
+    window.__hApply=function(lang){ window.__hLang=lang; try{document.documentElement.setAttribute('lang',lang);}catch(e){} walk(lang); fixNav(lang); ctlLabels(lang); };
 
     function injectCtl(){
       var nav=document.getElementById('dashNav'); if(!nav || document.getElementById('hCtlG')) return;
@@ -783,13 +797,17 @@ const OVERLAY_JS = `
       document.getElementById('hQuitBtn').addEventListener('click', function(){ var L=cur()==='en'; if(window.confirm(L?'Quit HAROO?':'하루를 종료할까요?')){ if(window.haroo&&window.haroo.quitApp) window.haroo.quitApp(); } });
     }
 
-    // 페이지 전환 클릭 시 재번역 (가벼운 패시브 리스너 — 클릭 처리엔 영향 없음)
-    document.addEventListener('click', function(e){
-      if(e.target.closest && e.target.closest('[data-page]')) setTimeout(function(){ window.__hApply(cur()); }, 70);
+    // 아무 클릭 후 재번역 (가벼운 패시브 리스너 — 클릭 처리엔 영향 없음)
+    var _t=null;
+    document.addEventListener('click', function(){
+      if(_t) return;
+      _t=setTimeout(function(){ _t=null; window.__hApply(cur()); }, 60);
+      setTimeout(function(){ window.__hApply(cur()); }, 320);
     }, false);
 
     // 초기 적용 (기본 영어)
-    function init(){ injectCtl(); if(window.haroo&&window.haroo.getLang){ window.haroo.getLang().then(function(l){ injectCtl(); window.__hApply(l||'en'); }); } else { window.__hApply('en'); } }
+    function go(l){ window.__hLang=l||'en'; injectCtl(); window.__hApply(window.__hLang); setTimeout(function(){ window.__hApply(window.__hLang); }, 250); }
+    function init(){ injectCtl(); if(window.haroo&&window.haroo.getLang){ window.haroo.getLang().then(go); } else { go('en'); } }
     init();
   })();
 
